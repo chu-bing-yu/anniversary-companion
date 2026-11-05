@@ -1,7 +1,7 @@
 {
   "id": "anniversary-companion",
   "name": "纪念日",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "纪念日：让角色从记忆里找回你们的日子，一天天悄悄准备，当天拆开惊喜。",
   "author": "chu-bing-yu",
   "entry": "https://raw.githubusercontent.com/chu-bing-yu/anniversary-companion/main/plugin.js",
