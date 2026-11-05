@@ -1,4 +1,4 @@
-/* anniversary-companion v0.1.0 | built 2026-11-05T12:15:00.825Z */
+/* anniversary-companion v0.2.0 | built 2026-11-05T13:39:54.078Z */
 (() => {
   // src/services/host.js
   function isFn(obj, name) {
@@ -34,10 +34,7 @@
       memorySearch: isFn(api.memory, "search"),
       ai: isFn(api.ai, "chat"),
       voice: isFn(api.voice, "tts"),
-      voiceProvider: isFn(api.voice, "getProvider"),
-      chatCard: !!api.chat && isFn(api.chat, "createCard"),
-      chatUpdateCard: !!api.chat && isFn(api.chat, "updateCard"),
-      chatAction: !!api.chat && isFn(api.chat, "dispatchCardAction")
+      voiceProvider: isFn(api.voice, "getProvider")
     };
     async function safe(label, fn, fallback) {
       try {
@@ -205,29 +202,6 @@
         }
       }
     };
-    var chat = {
-      async createCard(payload) {
-        if (!caps.chatCard) return { ok: false, reason: "no_api" };
-        try {
-          var message = await api.chat.createCard(payload);
-          return { ok: true, message: message || null };
-        } catch (e) {
-          if (typeof window !== "undefined" && window.console) {
-            console.warn("[anniversary-companion] chat.createCard 失败:", e && e.message);
-          }
-          return { ok: false, reason: "error" };
-        }
-      },
-      async updateCard(payload) {
-        if (!caps.chatUpdateCard) return { ok: false, reason: "no_api" };
-        try {
-          await api.chat.updateCard(payload);
-          return { ok: true };
-        } catch (e) {
-          return { ok: false, reason: "error" };
-        }
-      }
-    };
     return {
       caps,
       raw: api,
@@ -238,8 +212,7 @@
       memory,
       conversation,
       ai,
-      voice,
-      chat
+      voice
     };
   }
 
@@ -581,12 +554,38 @@
   }
 
   // src/core/settings.js
-  var SCHEMA_VERSION = 1;
+  var SCHEMA_VERSION = 2;
   var CARD_STYLES = [
     { id: "envelope", label: "信封" },
     { id: "polaroid", label: "拍立得" },
     { id: "starry", label: "星空" }
   ];
+  var PROMPT_KEYS = ["suggest", "prepare", "surprise", "card"];
+  function emptyPromptPair() {
+    return { system: "", user: "" };
+  }
+  function emptyPrompts() {
+    var out = {};
+    PROMPT_KEYS.forEach(function(key) {
+      out[key] = emptyPromptPair();
+    });
+    return out;
+  }
+  function mergePromptPair(raw) {
+    var src = raw && typeof raw === "object" ? raw : {};
+    return {
+      system: typeof src.system === "string" ? src.system.slice(0, 4e3) : "",
+      user: typeof src.user === "string" ? src.user.slice(0, 4e3) : ""
+    };
+  }
+  function mergePrompts(raw) {
+    var out = emptyPrompts();
+    if (!raw || typeof raw !== "object") return out;
+    PROMPT_KEYS.forEach(function(key) {
+      out[key] = mergePromptPair(raw[key]);
+    });
+    return out;
+  }
   var LIMITS = {
     dailyLimit: [1, 200],
     temperature: [0, 1.5]
@@ -601,7 +600,8 @@
       },
       defaultSecrecy: "hint",
       cardStyle: "envelope",
-      theme: "auto"
+      theme: "auto",
+      prompts: emptyPrompts()
     };
   }
   function clampInt(value, fallback, range) {
@@ -637,7 +637,8 @@
       cardStyle: pick2(raw.cardStyle, CARD_STYLES.map(function(s) {
         return s.id;
       }), def.cardStyle),
-      theme: raw.theme === "dark" || raw.theme === "light" ? raw.theme : "auto"
+      theme: raw.theme === "dark" || raw.theme === "light" ? raw.theme : "auto",
+      prompts: mergePrompts(raw.prompts)
     };
   }
   function patchSettings(settings, patch) {
@@ -646,6 +647,15 @@
     Object.keys(patch || {}).forEach(function(key) {
       var value = patch[key];
       var current = base[key];
+      if (key === "prompts" && value && typeof value === "object") {
+        var merged = Object.assign({}, current);
+        Object.keys(value).forEach(function(name) {
+          if (PROMPT_KEYS.indexOf(name) === -1) return;
+          merged[name] = Object.assign({}, current && current[name], value[name] || {});
+        });
+        next.prompts = merged;
+        return;
+      }
       if (value && typeof value === "object" && !Array.isArray(value) && current && typeof current === "object" && !Array.isArray(current)) {
         next[key] = Object.assign({}, current, value);
       } else {
@@ -671,9 +681,7 @@
         day,
         count: isFinite(count) && count > 0 ? Math.floor(count) : 0
       },
-      lastOpenAt: Number(meta.lastOpenAt) || 0,
-      pendingOpen: typeof meta.pendingOpen === "string" ? meta.pendingOpen.slice(0, 40) : "",
-      pendingReveal: typeof meta.pendingReveal === "string" ? meta.pendingReveal.slice(0, 40) : ""
+      lastOpenAt: Number(meta.lastOpenAt) || 0
     };
   }
   function createStore(host) {
@@ -871,9 +879,9 @@
     return TYPES[TYPES.length - 1];
   }
   var SEALS = {
-    rose: { ink: "#C9605A", paper: "#FBEFEC" },
-    gold: { ink: "#C9A227", paper: "#FBF5E4" },
-    peach: { ink: "#E8A08B", paper: "#FCF2ED" }
+    rose: { ink: "#B5716B", paper: "#F4F0EC" },
+    gold: { ink: "#B08D3F", paper: "#F6F2E8" },
+    peach: { ink: "#C08C7E", paper: "#F5F1ED" }
   };
   function sealOf(plan) {
     var type = typeOf(plan && plan.type);
@@ -939,7 +947,7 @@
     var name = charName || "TA";
     return (offsets || []).map(function(offset, i) {
       var line = lines[i % lines.length];
-      var teaser = offset === 0 ? name + "说今天有东西要给你" : offset <= 3 ? "手邊的东西快收尾了" : "又在偷偷忙一点什么";
+      var teaser = offset === 0 ? name + "说今天有东西要给你" : offset <= 3 ? "手边的东西快收尾了" : "又在偷偷忙一点什么";
       return {
         offsetDays: offset,
         teaser,
@@ -973,6 +981,14 @@
       return v === void 0 || v === null ? "" : String(v);
     });
   }
+  function estimateTokens(text) {
+    var s = String(text || "");
+    if (!s) return 0;
+    var cjk = s.match(/[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/g);
+    var cjkCount = cjk ? cjk.length : 0;
+    var other = s.length - cjkCount;
+    return Math.ceil(cjkCount * 1.05 + other / 3.5);
+  }
   var BASE_RULES = [
     "你正在为一个角色扮演插件写内容，服务对象是真实用户，不是做数据分析。",
     "硬性要求：",
@@ -989,28 +1005,22 @@
     "date 规则：能确定最初发生的年份就用那一年；只能确定月日时用今年。必须是合法日期。",
     "最多 4 个，最少 1 个；不要给重复的日期。"
   ].join("\n");
-  function suggestMessages(input) {
-    var content = renderPrompt([
-      "【今天是】{{today}}",
-      "【角色】{{char}}",
-      "【角色人设】{{char_persona}}",
-      "【用户】{{user}}",
-      "【用户人设】{{user_persona}}",
-      "",
-      "【长期记忆】",
-      "{{memory}}",
-      "",
-      "【最近对话】",
-      "{{recent}}",
-      "",
-      "请从上面这些资料里，找出可能值得做成纪念日的日子（相识、告白、第一次约会、生日、一起经历的某件事）。",
-      "每条要有明确依据；找不到就只给最有把握的那一个。"
-    ].join("\n"), input || {});
-    return [
-      { role: "system", content: SUGGEST_SYSTEM },
-      { role: "user", content }
-    ];
-  }
+  var SUGGEST_USER = [
+    "【今天是】{{today}}",
+    "【角色】{{char}}",
+    "【角色人设】{{char_persona}}",
+    "【用户】{{user}}",
+    "【用户人设】{{user_persona}}",
+    "",
+    "【长期记忆】",
+    "{{memory}}",
+    "",
+    "【最近对话】",
+    "{{recent}}",
+    "",
+    "请从上面这些资料里，找出可能值得做成纪念日的日子（相识、告白、第一次约会、生日、一起经历的某件事）。",
+    "每条要有明确依据；找不到就只给最有把握的那一个。"
+  ].join("\n");
   var PREPARE_SYSTEM = "你是一个角色扮演写手，擅长写「偷偷准备惊喜的人」的日常横切面。\n" + BASE_RULES + "\n" + [
     "输出格式（严格 JSON）：",
     '{"stages":[{"teaser":"16字以内的状态，不剧透内容","detail":"40字以内，具体做了什么"}]}',
@@ -1019,31 +1029,22 @@
     "detail 是角色自己的内心记录，可以写小动作、犹豫、练习、藏东西，但不能提前说出惊喜内容。",
     "每个阶段都要有推进感，不要重复同一个动作。"
   ].join("\n");
-  function prepareMessages(input) {
-    var stagesText = (input.stages || []).map(function(offset, i) {
-      return "第 " + (i + 1) + " 个阶段：距离纪念日还有 " + offset + " 天";
-    }).join("\n");
-    var content = renderPrompt([
-      "【今天是】{{today}}",
-      "【角色】{{char}}",
-      "【角色人设】{{char_persona}}",
-      "【用户】{{user}}",
-      "【这个日子】{{title}}（{{date}}，第 {{index}} 个）",
-      "【语气基调】{{tone}}",
-      "",
-      "【我们之间记得的事】",
-      "{{memory}}",
-      "",
-      "【准备阶段】",
-      "{{stages}}",
-      "",
-      "请按阶段写这次的准备过程。最后一个阶段（0 天）就是当天，写他准备好的那一刻。"
-    ].join("\n"), Object.assign({ stages: stagesText }, input || {}));
-    return [
-      { role: "system", content: PREPARE_SYSTEM },
-      { role: "user", content }
-    ];
-  }
+  var PREPARE_USER = [
+    "【今天是】{{today}}",
+    "【角色】{{char}}",
+    "【角色人设】{{char_persona}}",
+    "【用户】{{user}}",
+    "【这个日子】{{title}}（{{date}}，第 {{index}} 个）",
+    "【语气基调】{{tone}}",
+    "",
+    "【我们之间记得的事】",
+    "{{memory}}",
+    "",
+    "【准备阶段】",
+    "{{stages}}",
+    "",
+    "请按阶段写这次的准备过程。最后一个阶段（0 天）就是当天，写他准备好的那一刻。"
+  ].join("\n");
   var SURPRISE_SYSTEM = "你是一个角色扮演写手，负责写纪念日当天揭晓的惊喜内容。\n" + BASE_RULES + "\n" + [
     "输出格式（严格 JSON）：",
     '{"letter":[{"title":"小标题","body":"一段话"}],"gift":{"name":"礼物名","desc":"礼物说明"},"timeline":[{"when":"时间标记","text":"一句话回忆"}],"details":[{"text":"他记得的一件小事"}]}',
@@ -1053,81 +1054,182 @@
     "details 取 2-3 条，写「他记得但你可能忘了」的细节，每条 20-40 字，要具体到动作或一句话。",
     "整体语气：{{tone}}。"
   ].join("\n");
-  function surpriseMessages(input) {
-    var content = renderPrompt([
-      "【今天是】{{today}}",
-      "【角色】{{char}}",
-      "【角色人设】{{char_persona}}",
-      "【用户】{{user}}",
-      "【用户人设】{{user_persona}}",
-      "",
-      "【这个日子】{{title}}（{{date}}，第 {{index}} 个）",
-      "【保密度】{{secrecy}}",
-      "【语气基调】{{tone}}",
-      "【去年写给今年的话】{{last_year_note}}",
-      "",
-      "【我们之间记得的事】",
-      "{{memory}}",
-      "",
-      "【最近对话】",
-      "{{recent}}",
-      "",
-      "【他这些天做的准备】",
-      "{{stages}}",
-      "",
-      "请把惊喜内容写出来。写信的时候，就当用户正站在你面前拆开它。"
-    ].join("\n"), input || {});
-    return [
-      { role: "system", content: SURPRISE_SYSTEM },
-      { role: "user", content }
-    ];
-  }
+  var SURPRISE_USER = [
+    "【今天是】{{today}}",
+    "【角色】{{char}}",
+    "【角色人设】{{char_persona}}",
+    "【用户】{{user}}",
+    "【用户人设】{{user_persona}}",
+    "",
+    "【这个日子】{{title}}（{{date}}，第 {{index}} 个）",
+    "【保密度】{{secrecy}}",
+    "【语气基调】{{tone}}",
+    "【去年写给今年的话】{{last_year_note}}",
+    "",
+    "【我们之间记得的事】",
+    "{{memory}}",
+    "",
+    "【最近对话】",
+    "{{recent}}",
+    "",
+    "【他这些天做的准备】",
+    "{{stages}}",
+    "",
+    "请把惊喜内容写出来。写信的时候，就当用户正站在你面前拆开它。"
+  ].join("\n");
   var CARD_SYSTEM = [
     "你是一个擅长做「纸质贺卡」的前端设计师，输出会被放进一个沙箱 iframe 里运行。",
     "",
-    "硬性技术约束（违反任何一条，整张卡会被丢弃）：",
-    "1. 只输出一个完整的 HTML 文档，从 <!DOCTYPE html> 开始，不要解释、不要 ``` 代码块。",
-    "2. 所有样式写在文档内的 <style>，所有脚本写在文档内的 <script>；不允许出现 src=、href=、<link、<iframe、<form、<object、<embed、<base。",
+    "必须沿用的骨架（在它上面改样式与内容，不要另起一套结构）：",
+    '<div class="acard" data-ac-style="envelope|polaroid|starry">',
+    '  <div class="acard__stage">...</div>',
+    '  <button type="button" data-ac-open>拆开</button>',
+    "</div>",
+    "",
+    "硬性要求（违反任何一条，整张卡会被丢弃并换成内置模板）：",
+    "1. 只输出一个完整 HTML 文档，从 <!DOCTYPE html> 开始，不要解释、不要 ``` 代码块。",
+    "2. 所有样式写在文档内 <style>，所有脚本写在文档内 <script>；不允许出现 src=、href=、<link、<iframe、<form、<object、<embed、<base。",
     "3. 不允许联网：不能出现 fetch、XMLHttpRequest、WebSocket、sendBeacon、import(、importScripts。",
-    "4. 不允许访问宿主：不能出现 localStorage、sessionStorage、indexedDB、document.cookie、parent.document、top.document、window.top。",
-    "5. 不能用外部字体与外部图片。需要纹理用 repeating-linear-gradient、radial-gradient 或内联 SVG。",
-    "6. 尺寸自适应：html,body{width:100%;margin:0}，卡片内容宽度 100%，不要写固定 width:375px 之类的手机外壳，不要写 position:fixed 全屏遮罩。",
-    "7. 深浅色都要能看：背景用 var(--ac-paper, #FAF7F2)，文字用 var(--ac-ink, #2B2320)；深色由外部变量覆盖，你只要给出浅色兜底值。",
+    "4. 不允许访问宿主：不能出现 localStorage、sessionStorage、indexedDB、document.cookie、parent.document、top.document。",
+    "5. 必须保留一个带 data-ac-open 的可点元素；点击后必须调用一次 window.__acPost.done()；页面变化后调用 window.__acPost.height()。",
+    "6. 尺寸自适应：html,body{width:100%;margin:0}，不要写固定手机宽度，不要 position:fixed 全屏遮罩。",
+    "7. 颜色只用 CSS 变量并带浅色兜底：var(--paper,#FBF9F5)、var(--ink,#2B2724)、var(--muted,#6F6862)、var(--accent,#B5716B)、var(--line,#E7E1D9)。",
     "8. 必须支持 prefers-reduced-motion：动画在 reduce 时全部关闭。",
     "",
-    "交互契约：",
-    "- 只允许「点击 / 长按 / 拖动」这类本地交互，典型是打开信封、翻一页、点亮蜡烛、放一束烟花，不要做输入表单。",
-    '- 打开完成后调用一次 window.parent.postMessage({type:"ac-card",action:"done",payload:{}}, "*")。',
-    '- 页面渲染完成与每次内容高度变化后调用 window.parent.postMessage({type:"ac-card",action:"height",payload:{height:document.documentElement.scrollHeight}}, "*")。',
-    "- 不要依赖宿主返回任何数据，所有文案都写在卡片里。",
+    "视觉禁令（很重要）：",
+    "- 这张卡里不能出现任何照片、插图、封面图、海报、截图、头像。",
+    '- 不能写 <img>、不能写 background-image:url(...)、不能在文字里描述画面内容或"一张照片"。',
+    '- 所有"图"的观感只能用 linear-gradient / radial-gradient / repeating-linear-gradient / 内联 SVG 线条与噪点做出来。',
+    '- 不要提到"生图""图片""插图"这类词。',
     "",
-    "设计要求：",
-    "- 视觉方向：温暖纸感、私人纪念册、克制留白、细描边、胭脂红 #C9605A 点缀。",
-    "- 卡片高度控制在 380-720px 之间，打开前后高度变化不要超过 40%。",
-    "- 文字用衬线标题 + 无衬线正文，字号层级清楚，不要堆满屏。",
-    "- 不要用大段文字，正文合计不超过 120 字。"
+    "交互要求（三选一，必须真的能点两次以上）：",
+    "- 信封：点击后封口翻开、信纸向上抽出，再点收回。",
+    "- 拍立得：点击翻面，依次露出三张卡面，最后一张停住。",
+    "- 星空：点击依次点亮星轨与烛光，点亮后文字更亮。",
+    "",
+    "补充：",
+    "- 卡片高度 380-720px，开合前后高度变化不超过 40%。",
+    "- 衬线标题 + 无衬线正文，正文合计不超过 80 字。",
+    "- 留白要够，不要堆满屏，不要做霓虹发光或彩色渐变背景。"
   ].join("\n");
-  function cardMessages(input) {
-    var content = renderPrompt([
-      "请做一张纪念日贺卡。",
-      "",
-      "【风格】{{style}}",
-      "【纪念日】{{title}}（{{date}}，第 {{index}} 个）",
-      "【主角】{{char}} 写给 {{user}}",
-      "【卡片上的话】{{excerpt}}",
-      "【配色倾向】{{seal}}",
-      "",
-      "风格说明：",
-      "- 信封：米白纸面、折角封口、点击后信纸抽出；适合温柔克制。",
-      '- 拍立得：白框相纸、渐变"照片"区域、手写风标注；适合具体明亮的回忆。',
-      "- 星空：深色底、点状星芒、文字像被月光照着；适合郑重的话。",
-      "",
-      "只输出 HTML。"
-    ].join("\n"), input || {});
+  var CARD_USER = [
+    "请做一张纪念日贺卡。",
+    "",
+    "【风格】{{style}}",
+    "【纪念日】{{title}}（{{date}}，第 {{index}} 个）",
+    "【主角】{{char}} 写给 {{user}}",
+    "【卡片上的话】{{excerpt}}",
+    "【配色倾向】{{seal}}",
+    "",
+    "风格说明：",
+    "- 信封：米白纸面、折角封口、点击后信纸抽出；适合温柔克制。",
+    "- 拍立得：白框相纸、抽象色块（纯渐变与噪点，不放任何照片）、手写风日期标注；适合具体明亮的回忆。",
+    "- 星空：深色纸面、点状星芒、点击点亮星轨与烛光；适合郑重的话。",
+    "",
+    "只输出 HTML。"
+  ].join("\n");
+  function pickSystem(overrides, fallback) {
+    var text = overrides && typeof overrides.system === "string" ? overrides.system.trim() : "";
+    return text || fallback;
+  }
+  function buildUser(overrides, fallbackTemplate, vars) {
+    var text = overrides && typeof overrides.user === "string" ? overrides.user.trim() : "";
+    return renderPrompt(text || fallbackTemplate, vars || {});
+  }
+  function suggestMessages(input, overrides) {
+    var vars = input || {};
     return [
-      { role: "system", content: CARD_SYSTEM },
-      { role: "user", content }
+      { role: "system", content: pickSystem(overrides, SUGGEST_SYSTEM) },
+      { role: "user", content: buildUser(overrides, SUGGEST_USER, vars) }
     ];
+  }
+  function prepareMessages(input, overrides) {
+    var vars = input || {};
+    var stagesText = (vars.stages || []).map(function(offset, i) {
+      return "第 " + (i + 1) + " 个阶段：距离纪念日还有 " + offset + " 天";
+    }).join("\n");
+    var data = Object.assign({}, vars, { stages: stagesText });
+    return [
+      { role: "system", content: pickSystem(overrides, PREPARE_SYSTEM) },
+      { role: "user", content: buildUser(overrides, PREPARE_USER, data) }
+    ];
+  }
+  function surpriseMessages(input, overrides) {
+    var vars = input || {};
+    return [
+      { role: "system", content: pickSystem(overrides, SURPRISE_SYSTEM) },
+      { role: "user", content: buildUser(overrides, SURPRISE_USER, vars) }
+    ];
+  }
+  function cardMessages(input, overrides) {
+    var vars = input || {};
+    return [
+      { role: "system", content: pickSystem(overrides, CARD_SYSTEM) },
+      { role: "user", content: buildUser(overrides, CARD_USER, vars) }
+    ];
+  }
+  var PROMPT_META = [
+    {
+      key: "suggest",
+      label: "推测纪念日",
+      desc: "读角色记忆，给出候选日期",
+      placeholders: ["today", "char", "char_persona", "user", "user_persona", "memory", "recent"],
+      defaults: { system: SUGGEST_SYSTEM, user: SUGGEST_USER },
+      build: suggestMessages,
+      temperature: 0.5
+    },
+    {
+      key: "prepare",
+      label: "准备脚本",
+      desc: "创建后一次生成，之后按天推进",
+      placeholders: ["today", "char", "char_persona", "user", "title", "date", "index", "tone", "memory", "stages"],
+      defaults: { system: PREPARE_SYSTEM, user: PREPARE_USER },
+      build: prepareMessages,
+      temperature: 0.9
+    },
+    {
+      key: "surprise",
+      label: "惊喜内容",
+      desc: "信、礼物、回忆时间线与细节",
+      placeholders: ["today", "char", "char_persona", "user", "user_persona", "title", "date", "index", "secrecy", "tone", "last_year_note", "memory", "recent", "stages"],
+      defaults: { system: SURPRISE_SYSTEM, user: SURPRISE_USER },
+      build: surpriseMessages,
+      temperature: 0.95
+    },
+    {
+      key: "card",
+      label: "交互贺卡",
+      desc: "生成可点的 HTML 贺卡",
+      placeholders: ["style", "title", "date", "index", "char", "user", "excerpt", "seal"],
+      defaults: { system: CARD_SYSTEM, user: CARD_USER },
+      build: cardMessages,
+      temperature: 0.7
+    }
+  ];
+  var PROMPT_PLACEHOLDER_LABELS = {
+    today: "今天日期",
+    char: "角色名",
+    char_persona: "角色人设",
+    user: "用户名",
+    user_persona: "用户人设",
+    memory: "长期记忆",
+    recent: "最近对话",
+    title: "纪念日名称",
+    date: "纪念日日期",
+    index: "第几个纪念日",
+    secrecy: "保密度",
+    tone: "语气基调",
+    stages: "准备阶段",
+    last_year_note: "去年写给今年的话",
+    style: "贺卡风格",
+    excerpt: "卡片文案",
+    seal: "配色倾向"
+  };
+  function promptMeta(key) {
+    for (var i = 0; i < PROMPT_META.length; i++) {
+      if (PROMPT_META[i].key === key) return PROMPT_META[i];
+    }
+    return PROMPT_META[0];
   }
   function dateText(key) {
     return cnDate(key);
@@ -1163,7 +1265,7 @@
       tone: type.tone,
       memory: String(input.memoryText || "（暂无记录，可以只写动作和心情）").slice(0, 1800),
       stages: offsets
-    });
+    }, input.prompts);
     var res = await ai.chatJson(prompt, { temperature: 0.9 });
     if (!res.ok) return { stages: local, source: "fallback", reason: res.reason };
     var rawStages = asArray(res.data.stages);
@@ -1241,6 +1343,23 @@
     { re: /(parent|top)\s*\.\s*document/i, reason: "parent-dom" },
     { re: /(parent|top)\s*\.\s*location/i, reason: "parent-location" }
   ];
+  var REQUIRED = [
+    { re: /data-ac-open/i, reason: "missing-open" },
+    { re: /__acPost/, reason: "missing-bridge" }
+  ];
+  var IMAGE_WORDS = /照片|插图|封面图|海报|截图|头像|生图|<img\b|background-image\s*:\s*url\(|illustration|photo\b/i;
+  var BRIDGE_SCRIPT = [
+    "<script>(function(){",
+    "window.__acPost={",
+    'height:function(h){try{parent.postMessage({type:"ac-card",action:"height",payload:{height:h||document.documentElement.scrollHeight}},"*")}catch(e){}},',
+    'done:function(){try{parent.postMessage({type:"ac-card",action:"done",payload:{}},"*")}catch(e){}}',
+    "};",
+    'window.addEventListener("load",function(){__acPost.height()});',
+    "setTimeout(function(){__acPost.height()},120);",
+    "setTimeout(function(){__acPost.height()},420);",
+    'window.addEventListener("resize",function(){__acPost.height()});',
+    "})();<\/script>"
+  ].join("");
   function stripFence(raw) {
     var text = String(raw == null ? "" : raw).trim();
     var fence = /```(?:html|HTML)?\s*([\s\S]*?)```/.exec(text);
@@ -1263,15 +1382,13 @@
     }
     return "<!DOCTYPE html><html><head>" + meta + "</head><body>" + html + "</body></html>";
   }
-  function sanitizeCard(raw) {
-    var text = stripFence(raw);
-    if (!text) return { ok: false, html: "", reason: "empty" };
-    if (text.length > MAX_HTML_BYTES) return { ok: false, html: "", reason: "too-large" };
-    for (var i = 0; i < RULES.length; i++) {
-      if (RULES[i].re.test(text)) {
-        return { ok: false, html: "", reason: RULES[i].reason };
-      }
-    }
+  function injectBridge(html) {
+    if (/__acPost\s*=/.test(html)) return html;
+    var close = html.toLowerCase().lastIndexOf("</body>");
+    if (close === -1) return html + BRIDGE_SCRIPT;
+    return html.slice(0, close) + BRIDGE_SCRIPT + html.slice(close);
+  }
+  function normalizeShell(text) {
     if (!/<html[\s>]/i.test(text)) {
       text = '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>' + text + "</body></html>";
     } else if (!/<meta[^>]+charset/i.test(text)) {
@@ -1279,209 +1396,325 @@
         return m + '<meta charset="utf-8">';
       });
     }
-    return { ok: true, html: injectMeta(text), reason: "ok" };
+    return text;
+  }
+  function sanitizeCard(raw) {
+    var text = stripFence(raw);
+    if (!text) return { ok: false, html: "", reason: "empty" };
+    if (text.length > MAX_HTML_BYTES) return { ok: false, html: "", reason: "too-large" };
+    for (var i = 0; i < RULES.length; i++) {
+      if (RULES[i].re.test(text)) return { ok: false, html: "", reason: RULES[i].reason };
+    }
+    for (var j = 0; j < REQUIRED.length; j++) {
+      if (!REQUIRED[j].re.test(text)) return { ok: false, html: "", reason: REQUIRED[j].reason };
+    }
+    if (IMAGE_WORDS.test(text)) return { ok: false, html: "", reason: "wants-image" };
+    text = normalizeShell(text);
+    text = injectBridge(injectMeta(text));
+    return { ok: true, html: text, reason: "ok" };
   }
   function prepareTrustedCard(html) {
     var text = String(html || "");
     if (!text) return "";
-    if (!/<html[\s>]/i.test(text)) {
-      text = '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>' + text + "</body></html>";
-    }
-    if (/Content-Security-Policy/i.test(text)) return text;
-    return injectMeta(text);
+    text = normalizeShell(text);
+    if (!/Content-Security-Policy/i.test(text)) text = injectMeta(text);
+    return injectBridge(text);
   }
 
-  // src/core/cardTemplates.js
+  // src/core/cardSkeleton.js
+  var SKELETON_STYLES = ["envelope", "polaroid", "starry"];
   var BRIDGE = [
-    "function post(action, payload){",
-    '  try{ parent.postMessage({type:"ac-card",action:action,payload:payload||{}}, "*"); }catch(e){}',
-    "}",
-    "function sendHeight(){",
-    '  post("height", { height: Math.max(320, document.documentElement.scrollHeight) });',
-    "}",
-    'window.addEventListener("load", sendHeight);',
-    "setTimeout(sendHeight, 60);",
-    "setTimeout(sendHeight, 400);",
-    'window.addEventListener("resize", sendHeight);'
+    "window.__acPost = {",
+    "  height: function (value) {",
+    "    var h = value || document.documentElement.scrollHeight;",
+    '    try { parent.postMessage({ type: "ac-card", action: "height", payload: { height: h } }, "*"); } catch (e) {}',
+    "  },",
+    "  done: function () {",
+    '    try { parent.postMessage({ type: "ac-card", action: "done", payload: {} }, "*"); } catch (e) {}',
+    "  }",
+    "};",
+    'window.addEventListener("load", function () { __acPost.height(); });',
+    "setTimeout(function () { __acPost.height(); }, 80);",
+    "setTimeout(function () { __acPost.height(); }, 420);",
+    'window.addEventListener("resize", function () { __acPost.height(); });'
   ].join("\n");
-  var BASE = [
-    "*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}",
-    "html,body{margin:0;width:100%;background:transparent}",
-    'body{font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;color:var(--ac-ink,#2B2320);}',
-    '.serif{font-family:"Iowan Old Style","Songti SC","Noto Serif SC",STSong,serif;}',
-    "@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}"
+  var COMMON = [
+    "* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }",
+    "html, body { margin: 0; width: 100%; background: transparent; }",
+    "body { padding: 4px 2px 10px; }",
+    ".stack { display: flex; flex-direction: column; gap: 14px; }",
+    ".kicker { font-size: 10px; letter-spacing: .18em; text-transform: uppercase; color: var(--muted, #9C948C); }",
+    '.serif { font-family: "Iowan Old Style", "Songti SC", "Noto Serif SC", STSong, serif; }',
+    '.sans { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }',
+    "@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }"
   ].join("\n");
-  function dataOf(data) {
-    var d = data || {};
-    return {
-      char: escapeHtml(d.char || "TA"),
-      title: escapeHtml(d.title || "我们的纪念日"),
-      date: escapeHtml(d.date || ""),
-      index: escapeHtml(String(d.index || 1)),
-      line: escapeHtml(d.line || ""),
-      note: escapeHtml(d.note || "")
-    };
-  }
-  function shell(css, body, script) {
+  function doc(css, body, script) {
     return [
       "<!DOCTYPE html>",
       '<html lang="zh-CN"><head><meta charset="utf-8">',
       '<meta name="viewport" content="width=device-width, initial-scale=1">',
-      "<style>" + BASE + "\n" + css + "</style>",
+      "<style>" + COMMON + "\n" + css + "</style>",
       "</head><body>",
       body,
       "<script>" + BRIDGE + "\n" + (script || "") + "<\/script>",
       "</body></html>"
     ].join("\n");
   }
-  function envelopeCard(data) {
-    var d = dataOf(data);
+  function dataOf(input) {
+    var d = input || {};
+    var line = String(d.line || "这一封，我准备了很久。").trim();
+    var note2 = String(d.note || "").trim();
+    return {
+      char: escapeHtml(d.char || "TA"),
+      title: escapeHtml(d.title || "我们的纪念日"),
+      date: escapeHtml(d.date || ""),
+      index: escapeHtml(String(d.index || 1)),
+      line: escapeHtml(line),
+      note: escapeHtml(note2),
+      pages: Array.isArray(d.pages) && d.pages.length ? d.pages.slice(0, 3).map(function(p) {
+        return escapeHtml(String(p || ""));
+      }) : [line, d.date ? "那天是 " + d.date : "我记着那天", note2 || "往后还有很多个这样的日子"]
+    };
+  }
+  function envelope(input) {
+    var d = dataOf(input);
     var css = [
-      ".wrap{padding:22px 20px 26px;display:flex;flex-direction:column;align-items:center;gap:16px;}",
-      ".env{position:relative;width:100%;max-width:340px;aspect-ratio:1.55/1;border-radius:6px;",
-      "  background:linear-gradient(165deg,#FBEFEC 0%,#F6E7E2 60%,#F2DFD9 100%);",
-      "  border:1px solid #E2CDC6;box-shadow:0 10px 26px rgba(43,35,32,.10);cursor:pointer;",
-      "  transition:transform .5s cubic-bezier(.2,.8,.2,1);}",
-      ".env:active{transform:scale(.995)}",
-      '.env::before{content:"";position:absolute;inset:0;border-radius:6px;',
-      "  background:linear-gradient(135deg,rgba(255,255,255,.6),transparent 55%);pointer-events:none}",
-      ".flap{position:absolute;left:0;right:0;top:0;height:56%;",
-      "  background:linear-gradient(180deg,#F3E3DE,#EBD6CF);",
-      "  clip-path:polygon(0 0,100% 0,50% 100%);",
-      "  transform-origin:top center;transition:transform .62s cubic-bezier(.2,.8,.2,1);}",
-      ".card{position:absolute;left:12%;right:12%;top:26%;height:62%;border-radius:4px;",
-      "  background:#FFFDF9;border:1px solid #EADFD6;box-shadow:0 4px 12px rgba(43,35,32,.08);",
-      "  transform:translateY(14%);opacity:.96;transition:transform .62s cubic-bezier(.2,.8,.2,1) .12s,opacity .4s;",
-      "  padding:12px 14px;overflow:hidden;}",
-      ".card .name{font-size:12px;letter-spacing:.08em;color:#B08A82}",
-      ".card .line{margin-top:6px;font-size:15px;line-height:1.7;color:#4A3C36}",
-      ".seal{position:absolute;left:50%;top:52%;width:46px;height:46px;margin:-23px 0 0 -23px;border-radius:50%;",
-      "  background:radial-gradient(circle at 35% 30%,#D47A72,#B9504A);box-shadow:0 2px 6px rgba(120,40,35,.28);",
-      "  display:flex;align-items:center;justify-content:center;color:#FBEFEC;font-size:15px;",
-      '  font-family:"Songti SC",serif;transition:opacity .3s;}',
-      ".head{text-align:center}",
-      ".head .t{font-size:20px;letter-spacing:.01em}",
-      ".head .d{margin-top:6px;font-size:12px;color:#7A6A62;letter-spacing:.06em}",
-      ".hint{font-size:11px;letter-spacing:.14em;color:#9C8A81;text-transform:uppercase}",
-      ".opened .flap{transform:rotateX(180deg)}",
-      ".opened .card{transform:translateY(-6%);opacity:1}",
-      ".opened .seal{opacity:0}",
-      ".opened .hint{opacity:0;transition:opacity .2s}",
-      ".sign{margin-top:2px;font-size:12px;color:#8A786F}"
+      ":root { --paper: #FBF9F5; --paper-2: #F1ECE5; --ink: #2B2724; --muted: #9C948C; --accent: #B5716B; --line: #E7E1D9; }",
+      ".wrap { padding: 6px 4px 4px; }",
+      ".head { text-align: center; margin-bottom: 14px; }",
+      ".title { font-size: 21px; letter-spacing: .01em; color: var(--ink); }",
+      ".date { margin-top: 6px; font-size: 11px; letter-spacing: .1em; color: var(--muted); }",
+      ".env { position: relative; width: 100%; max-width: 340px; margin: 0 auto; aspect-ratio: 1.6/1;",
+      "  border: 1px solid var(--line); border-radius: 6px; cursor: pointer; overflow: hidden;",
+      "  background: linear-gradient(168deg, #FFFFFF 0%, var(--paper-2) 100%);",
+      "  box-shadow: 0 12px 26px rgba(43, 39, 36, .08); transition: transform .5s cubic-bezier(.2,.8,.2,1); }",
+      ".env:active { transform: scale(.994); }",
+      ".letter { position: absolute; left: 8%; right: 8%; top: 20%; padding: 16px 16px 18px;",
+      "  background: #FFFFFF; border: 1px solid var(--line); border-radius: 4px;",
+      "  box-shadow: 0 6px 16px rgba(43, 39, 36, .06);",
+      "  transform: translateY(30%); transition: transform .58s cubic-bezier(.2,.8,.2,1) .1s; }",
+      ".letter__from { font-size: 10px; letter-spacing: .12em; color: var(--muted); }",
+      ".letter__text { margin-top: 8px; font-size: 15px; line-height: 1.85; color: var(--ink);",
+      "  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }",
+      ".letter__sign { margin-top: 10px; font-size: 12px; color: var(--muted); text-align: right; }",
+      ".flap { position: absolute; left: 0; right: 0; top: 0; height: 58%;",
+      "  background: linear-gradient(180deg, var(--paper-2), #EDE7DF);",
+      "  clip-path: polygon(0 0, 100% 0, 50% 100%); transform-origin: top center;",
+      "  transition: transform .6s cubic-bezier(.2,.8,.2,1); }",
+      ".seal { position: absolute; left: 50%; top: 56%; width: 44px; height: 44px; margin: -22px 0 0 -22px;",
+      "  border-radius: 50%; background: var(--accent); color: #FFFFFF; display: flex; align-items: center;",
+      "  justify-content: center; font-size: 15px; transition: opacity .3s; }",
+      ".hint { margin-top: 12px; text-align: center; font-size: 10px; letter-spacing: .18em; color: var(--muted); }",
+      ".env.open .flap { transform: rotateX(180deg); }",
+      ".env.open .letter { transform: translateY(-26%) rotate(-1.2deg); }",
+      ".env.open .seal { opacity: 0; }",
+      ".env.open .hint { opacity: 0; }",
+      ".foot { margin-top: 4px; text-align: center; font-size: 10px; letter-spacing: .14em; color: var(--muted); }"
     ].join("\n");
     var body = [
-      '<div class="wrap">',
+      '<div class="wrap stack">',
       '  <div class="head">',
-      '    <div class="t serif">' + d.title + "</div>",
-      '    <div class="d">' + d.char + " · 第 " + d.index + " 个纪念日 · " + d.date + "</div>",
+      '    <div class="kicker">第 ' + d.index + " 个纪念日</div>",
+      '    <div class="title serif">' + d.title + "</div>",
+      '    <div class="date">' + d.date + "</div>",
       "  </div>",
-      '  <div class="env" id="env">',
-      '    <div class="card">',
-      '      <div class="name">' + d.char + " 写给你</div>",
-      '      <div class="line serif">' + (d.line || "这一封，我准备了很久。") + "</div>",
-      '      <div class="sign">' + (d.note || "") + "</div>",
+      '  <div class="env" data-ac-open role="button" tabindex="0" aria-label="拆开信封">',
+      '    <div class="letter">',
+      '      <div class="letter__from">' + d.char + " 写给你</div>",
+      '      <div class="letter__text serif">' + d.line + "</div>",
+      '      <div class="letter__sign serif">' + d.note + "</div>",
       "    </div>",
       '    <div class="flap"></div>',
-      '    <div class="seal serif">喜</div>',
+      '    <div class="seal serif">' + d.char.slice(0, 1) + "</div>",
       "  </div>",
-      '  <div class="hint">轻点信封拆开</div>',
+      '  <div class="hint">轻点拆开 · 再点收回</div>',
+      '  <div class="foot">' + d.char + " · " + d.date + "</div>",
       "</div>"
     ].join("\n");
     var script = [
-      'var env=document.getElementById("env");',
-      "var done=false;",
-      'env.addEventListener("click",function(){',
-      '  if(!done){done=true;env.classList.add("opened");post("done",{});}',
-      '  else{env.classList.remove("opened");}',
-      "  setTimeout(sendHeight, 120);",
-      "  setTimeout(sendHeight, 700);",
-      "});"
+      'var env = document.querySelector(".env");',
+      "var opened = false;",
+      "function toggle() {",
+      "  opened = !opened;",
+      '  env.classList.toggle("open", opened);',
+      "  if (opened) __acPost.done();",
+      "  setTimeout(function () { __acPost.height(); }, 160);",
+      "  setTimeout(function () { __acPost.height(); }, 640);",
+      "}",
+      'env.addEventListener("click", toggle);',
+      'env.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });'
     ].join("\n");
-    return shell(css, body, script);
+    return doc(css, body, script);
   }
-  function polaroidCard(data) {
-    var d = dataOf(data);
+  function polaroid(input) {
+    var d = dataOf(input);
+    var pages = d.pages.slice(0, 3);
+    while (pages.length < 3) pages.push(d.line);
+    var gradients = [
+      "linear-gradient(160deg,#F1E6DC 0%,#D9C0B4 55%,#B98F84 100%)",
+      "linear-gradient(160deg,#EDEAE1 0%,#CFD2C3 55%,#A7AD9B 100%)",
+      "linear-gradient(160deg,#EAE7EE 0%,#C9C3D4 55%,#A39DB4 100%)"
+    ];
     var css = [
-      ".wrap{padding:22px 20px 28px;display:flex;flex-direction:column;align-items:center;gap:14px;}",
-      ".photo{width:100%;max-width:310px;background:#FFFDF9;padding:14px 14px 0;",
-      "  border:1px solid #EADFD6;box-shadow:0 12px 30px rgba(43,35,32,.12);transform:rotate(-1.2deg);}",
-      ".frame{position:relative;width:100%;aspect-ratio:1/1.06;overflow:hidden;",
-      "  background:linear-gradient(160deg,#F7D9C9 0%,#EFB9A6 42%,#D98D7E 70%,#8E5E58 100%);}",
-      ".sun{position:absolute;width:96px;height:96px;border-radius:50%;left:58%;top:16%;",
-      "  background:radial-gradient(circle at 50% 50%,rgba(255,248,236,.95),rgba(255,224,196,.35) 60%,transparent 72%);",
-      "  filter:blur(.3px);}",
-      ".horizon{position:absolute;left:0;right:0;bottom:0;height:38%;",
-      "  background:linear-gradient(180deg,rgba(120,74,70,0),rgba(96,58,58,.55));}",
-      ".grain{position:absolute;inset:0;opacity:.10;",
-      "  background-image:radial-gradient(rgba(255,255,255,.9) .5px,transparent .6px);",
-      "  background-size:3px 3px;mix-blend-mode:overlay;}",
-      ".cap{padding:14px 2px 16px;text-align:center}",
-      ".cap .t{font-size:15px;letter-spacing:.01em}",
-      ".cap .d{margin-top:5px;font-size:11px;letter-spacing:.1em;color:#8A786F}",
-      ".txt{width:100%;max-width:310px;text-align:center;font-size:14px;line-height:1.9;color:#5B4C45}",
-      ".txt .q{display:block;margin-top:8px;font-size:12px;color:#9C8A81}"
+      ":root { --paper: #FBF9F5; --ink: #2B2724; --muted: #9C948C; --accent: #B5716B; --line: #E7E1D9; }",
+      ".wrap { padding: 4px 2px 2px; }",
+      ".deck { position: relative; width: 100%; max-width: 300px; margin: 0 auto; cursor: pointer; }",
+      ".shot { position: absolute; inset: 0; background: #FFFFFF; border: 1px solid var(--line);",
+      "  padding: 12px 12px 0; box-shadow: 0 14px 30px rgba(43, 39, 36, .1);",
+      "  transform-origin: 50% 90%; transition: transform .52s cubic-bezier(.2,.8,.2,1), opacity .3s; }",
+      ".shot:first-child { position: relative; }",
+      ".mono { position: relative; width: 100%; aspect-ratio: 1/1.04; overflow: hidden; }",
+      '.mono::after { content: ""; position: absolute; inset: 0; opacity: .12;',
+      "  background-image: radial-gradient(rgba(255,255,255,.9) .6px, transparent .7px); background-size: 3px 3px; }",
+      ".cap { padding: 12px 2px 16px; text-align: center; }",
+      ".cap__when { font-size: 10px; letter-spacing: .16em; color: var(--muted); }",
+      ".cap__text { margin-top: 6px; font-size: 13px; line-height: 1.7; color: var(--ink);",
+      "  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }",
+      ".dots { display: flex; justify-content: center; gap: 6px; margin-top: 12px; }",
+      ".dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--line); transition: background .3s, transform .3s; }",
+      ".dots i.on { background: var(--accent); transform: scale(1.2); }",
+      ".hint { margin-top: 10px; text-align: center; font-size: 10px; letter-spacing: .16em; color: var(--muted); }",
+      ".head { text-align: center; margin-bottom: 12px; }",
+      ".head .t { font-size: 18px; color: var(--ink); }",
+      ".head .s { margin-top: 4px; font-size: 10px; letter-spacing: .12em; color: var(--muted); }"
     ].join("\n");
+    var shots = pages.map(function(text, i) {
+      return [
+        '<div class="shot serif" data-shot="' + i + '">',
+        '  <div class="mono" style="background:' + gradients[i] + '"></div>',
+        '  <div class="cap"><div class="sans cap__when">' + d.date + "</div>",
+        '    <div class="cap__text">' + text + "</div></div>",
+        "</div>"
+      ].join("\n");
+    }).reverse().join("\n");
     var body = [
-      '<div class="wrap">',
-      '  <div class="photo">',
-      '    <div class="frame"><div class="sun"></div><div class="horizon"></div><div class="grain"></div></div>',
-      '    <div class="cap"><div class="t serif">' + d.title + "</div>",
-      '      <div class="d">' + d.char + " · 第 " + d.index + " 个 · " + d.date + "</div></div>",
+      '<div class="wrap stack">',
+      '  <div class="head serif">',
+      '    <div class="kicker">' + d.char + " · 第 " + d.index + " 个</div>",
+      '    <div class="t">' + d.title + "</div>",
+      '    <div class="s">' + d.note + "</div>",
       "  </div>",
-      '  <div class="txt serif">' + (d.line || "这一天，我想把光留在这里。"),
-      '    <span class="q">' + (d.note || "") + "</span></div>",
+      '  <div class="deck" data-ac-open role="button" tabindex="0" aria-label="翻看卡片">',
+      shots,
+      "  </div>",
+      '  <div class="dots">' + pages.map(function(p, i) {
+        return '<i class="' + (i === 0 ? "on" : "") + '"></i>';
+      }).join("") + "</div>",
+      '  <div class="hint">轻点翻一张 · 共 3 张</div>',
       "</div>"
     ].join("\n");
-    return shell(css, body, 'post("done",{});');
-  }
-  function starryCard(data) {
-    var d = dataOf(data);
-    var css = [
-      ".wrap{position:relative;padding:34px 22px 30px;min-height:400px;overflow:hidden;",
-      "  background:radial-gradient(120% 90% at 70% 8%,#2B2A44 0%,#1B1A2E 45%,#12111C 100%);",
-      "  color:#F3EEE6;display:flex;flex-direction:column;justify-content:center;gap:16px;}",
-      ".stars{position:absolute;inset:0;opacity:.75;",
-      "  background-image:radial-gradient(1.6px 1.6px at 18% 22%,rgba(255,255,255,.9),transparent),",
-      "  radial-gradient(1.2px 1.2px at 76% 16%,rgba(255,255,255,.75),transparent),",
-      "  radial-gradient(1.4px 1.4px at 42% 62%,rgba(255,255,255,.8),transparent),",
-      "  radial-gradient(1px 1px at 86% 54%,rgba(255,255,255,.6),transparent),",
-      "  radial-gradient(1.2px 1.2px at 28% 84%,rgba(255,255,255,.7),transparent),",
-      "  radial-gradient(1px 1px at 64% 88%,rgba(255,255,255,.55),transparent);",
-      "  background-size:100% 100%;}",
-      ".moon{position:absolute;right:18%;top:14%;width:56px;height:56px;border-radius:50%;",
-      "  background:radial-gradient(circle at 36% 32%,#FFF6E2,#E7D4B4 62%,#C9B08A 100%);",
-      "  box-shadow:0 0 40px rgba(255,236,200,.35);}",
-      ".in{position:relative;z-index:1}",
-      ".k{font-size:11px;letter-spacing:.18em;color:rgba(243,238,230,.62);text-transform:uppercase}",
-      ".t{margin-top:10px;font-size:24px;line-height:1.34;letter-spacing:.01em}",
-      ".body{margin-top:14px;font-size:14px;line-height:1.95;color:rgba(243,238,230,.86);max-width:30ch}",
-      ".d{margin-top:18px;font-size:11px;letter-spacing:.1em;color:rgba(243,238,230,.55)}",
-      ".sign{margin-top:6px;font-size:12px;color:rgba(243,238,230,.7)}",
-      ".glow{position:absolute;left:50%;bottom:-40%;width:150%;height:70%;transform:translateX(-50%);",
-      "  background:radial-gradient(ellipse at 50% 50%,rgba(201,96,90,.22),transparent 70%);}"
+    var script = [
+      'var deck = document.querySelector(".deck");',
+      'var shots = Array.prototype.slice.call(document.querySelectorAll(".shot")).reverse();',
+      'var dots = Array.prototype.slice.call(document.querySelectorAll(".dots i"));',
+      "var current = 0;",
+      "function apply() {",
+      "  shots.forEach(function (shot, i) {",
+      "    var depth = (i - current + shots.length) % shots.length;",
+      "    var tx = depth * 6;",
+      "    var ty = depth * -10;",
+      "    var rot = depth * -1.6;",
+      '    shot.style.transform = "translate(" + tx + "px," + ty + "px) rotate(" + rot + "deg) scale(" + (1 - depth * 0.02) + ")";',
+      "    shot.style.zIndex = String(shots.length - depth);",
+      '    shot.style.opacity = depth > 2 ? "0" : "1";',
+      "  });",
+      '  dots.forEach(function (dot, i) { dot.className = i === current ? "on" : ""; });',
+      "}",
+      "function next() {",
+      "  current = (current + 1) % shots.length;",
+      "  apply();",
+      "  __acPost.done();",
+      "  setTimeout(function () { __acPost.height(); }, 120);",
+      "}",
+      'deck.addEventListener("click", next);',
+      'deck.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); next(); } });',
+      "apply();"
     ].join("\n");
+    return doc(css, body, script);
+  }
+  function starry(input) {
+    var d = dataOf(input);
+    var css = [
+      ":root { --paper: #14120F; --ink: #F4EFE8; --muted: #9C948C; --accent: #C98E87; --line: #2E2925; }",
+      ".wrap { position: relative; padding: 30px 22px 26px; overflow: hidden; border-radius: 10px;",
+      "  background: radial-gradient(120% 92% at 72% 8%, #2B2723 0%, #1B1815 46%, #100E0C 100%);",
+      "  color: var(--ink); min-height: 420px; display: flex; flex-direction: column; justify-content: flex-end; }",
+      ".sky { position: absolute; inset: 0; }",
+      ".star { position: absolute; width: 3px; height: 3px; border-radius: 50%; background: rgba(244,239,232,.35);",
+      "  transition: background .5s, box-shadow .5s, transform .5s; }",
+      ".star.lit { background: #FFF3DC; box-shadow: 0 0 12px rgba(255,236,200,.9); transform: scale(1.5); }",
+      ".moon { position: absolute; right: 16%; top: 12%; width: 52px; height: 52px; border-radius: 50%;",
+      "  background: radial-gradient(circle at 36% 32%, #FFF8E8, #DCC9A9 64%, #B8A184);",
+      "  box-shadow: 0 0 42px rgba(255,236,200,.22); opacity: .85; }",
+      ".candle { position: absolute; left: 50%; bottom: 20px; width: 6px; height: 34px; margin-left: -3px;",
+      "  border-radius: 3px; background: linear-gradient(180deg,#E8DCC6,#B9A98F); opacity: .5; transition: opacity .4s; }",
+      '.candle::before { content: ""; position: absolute; left: 50%; top: -14px; width: 8px; height: 14px; margin-left: -4px;',
+      "  border-radius: 50% 50% 45% 45%; background: transparent; transition: background .5s, box-shadow .5s; }",
+      ".candle.lit { opacity: 1; }",
+      ".candle.lit::before { background: radial-gradient(circle at 50% 70%, #FFF3DC, #E4A46F 60%, transparent 72%);",
+      "  box-shadow: 0 0 22px rgba(228,164,111,.7); }",
+      ".content { position: relative; z-index: 1; }",
+      ".kicker { color: rgba(244,239,232,.55); }",
+      ".title { margin-top: 8px; font-size: 23px; line-height: 1.4; color: rgba(244,239,232,.72); transition: color .6s; }",
+      ".line { margin-top: 12px; font-size: 14px; line-height: 1.95; color: rgba(244,239,232,.6);",
+      "  max-width: 30ch; transition: color .6s; }",
+      ".sign { margin-top: 16px; font-size: 11px; letter-spacing: .12em; color: rgba(244,239,232,.45); }",
+      ".hint { position: relative; z-index: 1; margin-top: 22px; font-size: 10px; letter-spacing: .18em; color: rgba(244,239,232,.45); }",
+      ".full .title { color: #FBF4E8; }",
+      ".full .line { color: rgba(251,244,232,.82); }"
+    ].join("\n");
+    var stars = [
+      { x: 12, y: 18 },
+      { x: 28, y: 34 },
+      { x: 46, y: 14 },
+      { x: 62, y: 30 },
+      { x: 78, y: 44 },
+      { x: 88, y: 22 },
+      { x: 36, y: 58 },
+      { x: 68, y: 66 },
+      { x: 20, y: 72 },
+      { x: 52, y: 80 }
+    ].map(function(s, i) {
+      return '<i class="star" data-star="' + i + '" style="left:' + s.x + "%;top:" + s.y + '%"></i>';
+    }).join("");
     var body = [
-      '<div class="wrap">',
-      '  <div class="stars"></div><div class="moon"></div><div class="glow"></div>',
-      '  <div class="in">',
-      '    <div class="k">' + d.char + " · 第 " + d.index + " 个纪念日</div>",
-      '    <div class="t serif">' + d.title + "</div>",
-      '    <div class="body serif">' + (d.line || "有些日子，我把它放在了心里最亮的地方。") + "</div>",
-      '    <div class="d">' + d.date + "</div>",
-      '    <div class="sign serif">' + (d.note || "") + "</div>",
+      '<div class="wrap" data-ac-open role="button" tabindex="0" aria-label="点亮">',
+      '  <div class="sky">' + stars + '<div class="moon"></div></div>',
+      '  <div class="candle"></div>',
+      '  <div class="content">',
+      '    <div class="kicker">' + d.char + " · 第 " + d.index + " 个纪念日</div>",
+      '    <div class="title serif">' + d.title + "</div>",
+      '    <div class="line serif">' + d.line + "</div>",
+      '    <div class="sign">' + d.date + " · " + d.note + "</div>",
       "  </div>",
+      '  <div class="hint">轻点点亮 · 共三下</div>',
       "</div>"
     ].join("\n");
-    return shell(css, body, 'post("done",{});');
+    var script = [
+      'var wrap = document.querySelector(".wrap");',
+      'var stars = Array.prototype.slice.call(document.querySelectorAll(".star")).slice(0, 5);',
+      'var candle = document.querySelector(".candle");',
+      "var lit = 0;",
+      "function light() {",
+      '  if (lit < stars.length) { stars[lit].classList.add("lit"); lit += 1; __acPost.done(); }',
+      '  else if (!candle.classList.contains("lit")) { candle.classList.add("lit"); wrap.classList.add("full"); lit += 1; __acPost.done(); }',
+      '  else { stars.forEach(function (s) { s.classList.remove("lit"); }); candle.classList.remove("lit"); wrap.classList.remove("full"); lit = 0; }',
+      "  setTimeout(function () { __acPost.height(); }, 120);",
+      "}",
+      'wrap.addEventListener("click", light);',
+      'wrap.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); light(); } });'
+    ].join("\n");
+    return doc(css, body, script);
   }
-  var BUILDERS = {
-    envelope: envelopeCard,
-    polaroid: polaroidCard,
-    starry: starryCard
-  };
+  var BUILDERS = { envelope, polaroid, starry };
+  function fillSkeleton(styleId, data) {
+    var id = SKELETON_STYLES.indexOf(styleId) === -1 ? "envelope" : styleId;
+    return BUILDERS[id](data || {});
+  }
+
+  // src/core/cardTemplates.js
   function buildFallbackCard(styleId, data) {
-    var fn = BUILDERS[styleId] || BUILDERS.envelope;
-    return fn(data);
+    return fillSkeleton(styleId, data);
   }
 
   // src/core/memoryText.js
@@ -1736,7 +1969,7 @@
         }).map(function(s) {
           return "· " + s.detail;
         }).join("\n") || "（还没记录）"
-      });
+      }, input.prompts && input.prompts.surprise);
       var res = await ai.chatJson(prompt, { temperature: 0.95 });
       if (res.ok) {
         letter = pickLetter(res.data.letter, plan, char, type, longTerm, lastNote);
@@ -1762,7 +1995,7 @@
         user: input.userName || "你",
         excerpt: truncate(letter[0] && letter[0].body || "", 70),
         seal: "主色 " + sealOf(plan).ink + " 点缀，纸面 " + sealOf(plan).paper
-      });
+      }, input.prompts && input.prompts.card);
       var cardRes = await ai.chat(cardPrompt, { temperature: 0.7 });
       if (cardRes.ok) {
         var clean = sanitizeCard(cardRes.text);
@@ -1957,7 +2190,6 @@
   }
 
   // src/app/container.js
-  var MESSAGE_TYPE = "ac-anniversary";
   function userNameOf(persona) {
     if (!persona) return "你";
     return persona.name || persona.handle || persona.displayName || "你";
@@ -1981,7 +2213,8 @@
       busy: "",
       rev: 0,
       revealOpened: false,
-      draft: null
+      draft: null,
+      promptKey: ""
     };
     var listeners = /* @__PURE__ */ new Set();
     var history = [];
@@ -2070,6 +2303,43 @@
       charListCache = { at: Date.now(), value };
       return value;
     }
+    var STYLE_LABEL2 = { envelope: "信封", polaroid: "拍立得", starry: "星空" };
+    function previewVars(key, plan, context, now) {
+      var occurrence = plan ? occurrenceKey(plan, now) : todayKey(now);
+      var type = typeOf(plan ? plan.type : "custom");
+      var stages = plan && plan.prepare.stages.length ? plan.prepare.stages.slice().sort(function(a, b) {
+        return b.offsetDays - a.offsetDays;
+      }) : [];
+      var vars = {
+        today: dateText(todayKey(now)),
+        char: context.character && (context.character.handle || context.character.name) || "TA",
+        char_persona: String(context.character && (context.character.persona || context.character.bio) || "（角色人设）").slice(0, 600),
+        user: context.userName || "你",
+        user_persona: context.userPersona || "（用户人设）",
+        memory: context.memoryText || "（暂无长期记忆）",
+        recent: context.recentText || "（暂无最近对话）",
+        title: plan ? plan.title : "相识纪念日",
+        date: dateText(occurrence),
+        index: String(plan ? planIndex(plan, now) : 1),
+        secrecy: plan ? plan.secrecy : "hint",
+        tone: type.tone,
+        last_year_note: plan && plan.nextYearNote && plan.nextYearNote.text || "",
+        style: STYLE_LABEL2[settings.cardStyle] || "信封",
+        excerpt: "（示例）这一封，我准备了很久。",
+        seal: "主色 #B5716B，纸面 #F4F0EC"
+      };
+      if (key === "prepare") {
+        vars.stages = stageOffsets(plan ? Math.max(0, daysLeft(plan, now)) : 30);
+      } else if (key === "surprise") {
+        var done = stages.filter(function(s) {
+          return s.doneAt;
+        });
+        vars.stages = done.length ? done.map(function(s) {
+          return "· " + s.detail;
+        }).join("\n") : "（还没记录）";
+      }
+      return vars;
+    }
     async function persistPlans(next, opts2) {
       plans = next;
       var silent = opts2 && opts2.silent;
@@ -2099,6 +2369,7 @@
             char: context.character,
             userName: context.userName,
             memoryText: context.memoryText,
+            prompts: settings.prompts.prepare,
             now: Date.now()
           });
         } catch (e) {
@@ -2134,6 +2405,7 @@
           recentText: context.recentText,
           longTerm: context.longTerm,
           settings,
+          prompts: settings.prompts,
           now: Date.now()
         });
       } catch (e) {
@@ -2163,6 +2435,7 @@
       }
       state.route = route;
       state.planId = targetId;
+      state.promptKey = next.promptKey || "";
       if (route !== "reveal") state.revealOpened = false;
       if (route === "edit" && next.draft) state.draft = next.draft;
       publish();
@@ -2301,7 +2574,7 @@
           user_persona: context.userPersona,
           memory: context.memoryText,
           recent: context.recentText
-        });
+        }, settings.prompts.suggest);
         var res = await ai.chatJson(messages, { temperature: 0.5 });
         if (!res.ok) return { ok: false, reason: res.reason };
         var candidates = (Array.isArray(res.data.candidates) ? res.data.candidates : []).map(function(item) {
@@ -2386,60 +2659,52 @@
         persistPlans(upsertPlan(plans, next), { silent: true });
         return true;
       },
-      sendChatCard: async function(id) {
-        var plan = findPlan(plans, id);
-        if (!plan) return { ok: false };
-        if (!host.caps.chatCard) {
-          toast("当前宿主版本还不支持发卡片");
-          return { ok: false, reason: "no_api" };
-        }
-        if (!plan.characterId) {
-          toast("这个纪念日没有绑定角色，发不了卡");
-          return { ok: false, reason: "no_character" };
-        }
-        var context = await loadCharacterContext(plan);
-        var character = context.character;
-        if (!character || !character.conversationId) {
-          toast("找不到和 TA 的会话");
-          return { ok: false, reason: "no_conversation" };
-        }
-        var index = planIndex(plan, Date.now());
-        var res = await host.chat.createCard({
-          conversationId: character.conversationId,
-          messageType: MESSAGE_TYPE,
-          isMe: false,
-          senderId: character.id,
-          cardData: {
-            planId: plan.id,
-            title: plan.title,
-            charName: character.handle || character.name || "",
-            avatar: character.avatar || "",
-            dateText: dateText(occurrenceKey(plan, Date.now())),
-            index
-          },
-          modelText: (character.handle || character.name || "TA") + "在我们的「" + plan.title + "」这天，留了一份惊喜。"
-        });
-        if (!res.ok) {
-          toast("发卡片失败，宿主版本可能不支持");
-          return { ok: false, reason: res.reason };
-        }
-        var next = Object.assign({}, plan, {
-          chatCard: {
-            messageId: res.message && res.message.id || "",
-            sentDay: todayKey()
-          }
-        });
-        await persistPlans(upsertPlan(plans, next), { silent: true });
-        toast("已经发到聊天里了");
-        return { ok: true };
+      /* ---------- 提示词 ---------- */
+      savePrompt: function(key, patch) {
+        if (PROMPT_KEYS.indexOf(key) === -1) return false;
+        var next = { prompts: {} };
+        next.prompts[key] = {
+          system: String(patch && patch.system || ""),
+          user: String(patch && patch.user || "")
+        };
+        settings = patchSettings(settings, next);
+        state.settings = settings;
+        state.rev += 1;
+        store.saveSettings(settings);
+        publish();
+        return true;
       },
-      saveSettings: function(patch) {
+      resetPrompt: function(key) {
+        return actions.savePrompt(key, { system: "", user: "" });
+      },
+      /** 用真实上下文渲染「实际会发出去的请求」，只做字符串替换，不调 AI */
+      previewPrompt: async function(key, draft) {
+        var meta2 = promptMeta(key);
+        var now = Date.now();
+        var plan = findPlan(plans, state.planId) || plans[0] || null;
+        var context = plan ? await loadCharacterContext(plan) : {
+          character: null,
+          persona: null,
+          longTerm: null,
+          memoryText: "",
+          recentText: "",
+          userName: "你",
+          userPersona: ""
+        };
+        var vars = previewVars(key, plan, context, now);
+        var messages = meta2.build(vars, draft || {});
+        var tokens = messages.reduce(function(sum, item) {
+          return sum + estimateTokens(item.content);
+        }, 0);
+        return { ok: true, messages, tokens };
+      },
+      saveSettings: function(patch, options) {
         settings = patchSettings(settings, patch);
         state.settings = settings;
         state.rev += 1;
         store.saveSettings(settings);
         if (opts.onThemeChange) opts.onThemeChange(settings.theme);
-        publish();
+        if (!(options && options.silent)) publish();
       },
       exportData: async function() {
         var data = await store.exportAll();
@@ -2476,24 +2741,6 @@
         return true;
       }
     };
-    async function maybeSendDayCards() {
-      if (!host.caps.chatCard) return;
-      var now = Date.now();
-      var today = todayKey(now);
-      var list = plans.filter(function(plan) {
-        if (!plan.characterId || plan.archived) return false;
-        if (!isRevealDay(plan, now)) return false;
-        if (!plan.prepare.scriptedAt) return false;
-        if (plan.chatCard && plan.chatCard.sentDay === today) return false;
-        return true;
-      }).slice(0, 2);
-      for (var i = 0; i < list.length; i++) {
-        try {
-          await actions.sendChatCard(list[i].id);
-        } catch (e) {
-        }
-      }
-    }
     async function init() {
       settings = await store.loadSettings();
       plans = await store.loadPlans();
@@ -2507,31 +2754,10 @@
       state.plans = plans;
       state.meta = meta;
       state.rev += 1;
-      var pendingOpen = "";
-      try {
-        if (typeof window !== "undefined" && window.__acPendingOpen) {
-          pendingOpen = String(window.__acPendingOpen);
-          window.__acPendingOpen = "";
-        }
-      } catch (e) {
-      }
-      if (!pendingOpen && meta.pendingOpen) pendingOpen = meta.pendingOpen;
-      if (pendingOpen) {
-        var target = findPlan(plans, pendingOpen);
-        meta = Object.assign({}, meta, { pendingOpen: "" });
-        await store.saveMeta(meta);
-        state.meta = meta;
-        if (target) {
-          state.route = "detail";
-          state.planId = target.id;
-        }
-      }
       meta = Object.assign({}, meta, { lastOpenAt: Date.now() });
       await store.saveMeta(meta);
       state.meta = meta;
       publish();
-      maybeSendDayCards().catch(function() {
-      });
       ensureNearestScript();
     }
     function ensureNearestScript() {
@@ -2550,9 +2776,7 @@
       if (destroyed) return;
       var ticked = tickPlans(plans, Date.now());
       if (!ticked.changed) return;
-      persistPlans(ticked.plans).then(function() {
-        return maybeSendDayCards();
-      }).catch(function() {
+      persistPlans(ticked.plans).catch(function() {
       });
     }
     await init();
@@ -2621,7 +2845,7 @@
   }
 
   // src/ui/theme.css
-  var theme_default = '/* 设计 Token：颜色 / 字号 / 行高 / 字距 / 间距 / 形状 / 动效，全部作用域在 .ac-root */\n\n.ac-root {\n  /* 纸张与墨色 */\n  --ac-paper: #FAF7F2;\n  --ac-paper-2: #FFFFFF;\n  --ac-paper-3: #F3ECE4;\n  --ac-ink: #2B2320;\n  --ac-ink-2: #6B5F58;\n  --ac-ink-3: #9C8A81;\n  --ac-line: #E6DCD2;\n  --ac-line-soft: #F0E8DF;\n\n  /* 胭脂 / 蜜桃 / 金 */\n  --ac-rose: #C9605A;\n  --ac-rose-soft: #E8A08B;\n  --ac-rose-wash: #FBEFEC;\n  --ac-gold: #C9A227;\n  --ac-gold-wash: #FBF5E4;\n  --ac-ok: #3F7D5A;\n  --ac-warn: #C24B3F;\n\n  /* 字号阶梯 */\n  --ac-display: clamp(64px, 24vw, 120px);\n  --ac-h1: clamp(24px, 6.6vw, 30px);\n  --ac-h2: 17px;\n  --ac-body: 15px;\n  --ac-small: 14px;\n  --ac-cap: 12px;\n  --ac-micro: 11px;\n\n  /* 行高与字距 */\n  --ac-leading-display: 1;\n  --ac-leading-h1: 1.15;\n  --ac-leading-h2: 1.35;\n  --ac-leading-body: 1.7;\n  --ac-leading-letter: 1.9;\n  --ac-tracking-display: -0.03em;\n  --ac-tracking-body: 0;\n  --ac-tracking-cap: 0.08em;\n  --ac-tracking-wide: 0.16em;\n\n  /* 间距：只用 4 的倍数 */\n  --ac-s1: 4px;\n  --ac-s2: 8px;\n  --ac-s3: 12px;\n  --ac-s4: 16px;\n  --ac-s5: 20px;\n  --ac-s6: 28px;\n  --ac-s7: 40px;\n  --ac-page-x: 20px;\n\n  /* 形状与阴影 */\n  --ac-radius: 10px;\n  --ac-radius-sm: 6px;\n  --ac-line-1: 1px solid var(--ac-line);\n  --ac-shadow-1: 0 1px 2px rgba(43, 35, 32, 0.04);\n  --ac-shadow-2: 0 8px 24px rgba(43, 35, 32, 0.07);\n\n  /* 动效 */\n  --ac-ease: cubic-bezier(0.2, 0.8, 0.2, 1);\n  --ac-dur: 200ms;\n  --ac-dur-slow: 520ms;\n\n  /* 字体栈：只用系统字体，不引外链 */\n  --ac-serif: "Iowan Old Style", "Playfair Display", "Songti SC", "Noto Serif SC", STSong, "Times New Roman", serif;\n  --ac-sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", sans-serif;\n}\n\n/* 深色：深底白字有光学晕光，正文用 400 */\n.ac-root[data-theme="dark"] {\n  --ac-paper: #14100E;\n  --ac-paper-2: #1C1714;\n  --ac-paper-3: #241D19;\n  --ac-ink: #F5EFE8;\n  --ac-ink-2: #BCAEA4;\n  --ac-ink-3: #8C7D74;\n  --ac-line: #2E2621;\n  --ac-line-soft: #241D19;\n  --ac-rose: #E08A83;\n  --ac-rose-soft: #C97C6D;\n  --ac-rose-wash: #2A1B19;\n  --ac-gold: #D8B85A;\n  --ac-gold-wash: #2A2418;\n  --ac-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);\n  --ac-shadow-2: 0 8px 24px rgba(0, 0, 0, 0.35);\n}\n\n@media (prefers-reduced-motion: reduce) {\n  .ac-root {\n    --ac-dur: 1ms;\n    --ac-dur-slow: 1ms;\n  }\n}\n';
+  var theme_default = '/* 设计 Token：米白纸面 + 低饱和胭脂，全部作用域在 .ac-root */\n\n.ac-root {\n  /* 纸张与墨色 */\n  --ac-paper: #FBF9F5;\n  --ac-paper-2: #FFFFFF;\n  --ac-paper-3: #F3F0EA;\n  --ac-ink: #2B2724;\n  --ac-ink-2: #6F6862;\n  --ac-ink-3: #9C948C;\n  --ac-line: #E7E1D9;\n  --ac-line-soft: #F1ECE5;\n\n  /* 胭脂 / 金：只做小面积强调 */\n  --ac-rose: #B5716B;\n  --ac-rose-soft: #C99A93;\n  --ac-rose-wash: #F2EEEB;\n  --ac-gold: #B08D3F;\n  --ac-gold-wash: #F5F1E6;\n  --ac-ok: #5A7A62;\n  --ac-warn: #A65C52;\n\n  /* 字号阶梯 */\n  --ac-display: clamp(64px, 24vw, 120px);\n  --ac-h1: clamp(24px, 6.6vw, 30px);\n  --ac-h2: 17px;\n  --ac-body: 15px;\n  --ac-small: 14px;\n  --ac-cap: 12px;\n  --ac-micro: 11px;\n\n  /* 行高与字距 */\n  --ac-leading-display: 1;\n  --ac-leading-h1: 1.15;\n  --ac-leading-h2: 1.35;\n  --ac-leading-body: 1.7;\n  --ac-leading-letter: 1.9;\n  --ac-tracking-display: -0.03em;\n  --ac-tracking-body: 0;\n  --ac-tracking-cap: 0.08em;\n  --ac-tracking-wide: 0.16em;\n\n  /* 间距：只用 4 的倍数 */\n  --ac-s1: 4px;\n  --ac-s2: 8px;\n  --ac-s3: 12px;\n  --ac-s4: 16px;\n  --ac-s5: 20px;\n  --ac-s6: 28px;\n  --ac-s7: 40px;\n  --ac-page-x: 20px;\n\n  /* 形状与阴影 */\n  --ac-radius: 10px;\n  --ac-radius-sm: 6px;\n  --ac-line-1: 1px solid var(--ac-line);\n  --ac-shadow-1: 0 1px 2px rgba(43, 39, 36, 0.04);\n  --ac-shadow-2: 0 10px 26px rgba(43, 39, 36, 0.07);\n\n  /* 动效 */\n  --ac-ease: cubic-bezier(0.2, 0.8, 0.2, 1);\n  --ac-dur: 200ms;\n  --ac-dur-slow: 520ms;\n\n  /* 字体栈：只用系统字体，不引外链 */\n  --ac-serif: "Iowan Old Style", "Playfair Display", "Songti SC", "Noto Serif SC", STSong, "Times New Roman", serif;\n  --ac-sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", sans-serif;\n}\n\n/* 深色：深底白字有光学晕光，正文用 400 */\n.ac-root[data-theme="dark"] {\n  --ac-paper: #141210;\n  --ac-paper-2: #1C1917;\n  --ac-paper-3: #24201D;\n  --ac-ink: #F4EFE8;\n  --ac-ink-2: #B8B0A8;\n  --ac-ink-3: #8A827A;\n  --ac-line: #2E2925;\n  --ac-line-soft: #241F1C;\n  --ac-rose: #C98E87;\n  --ac-rose-soft: #A97A74;\n  --ac-rose-wash: #241E1B;\n  --ac-gold: #C3A45E;\n  --ac-gold-wash: #24200F;\n  --ac-ok: #79A184;\n  --ac-warn: #C98076;\n  --ac-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.32);\n  --ac-shadow-2: 0 10px 26px rgba(0, 0, 0, 0.38);\n}\n\n@media (prefers-reduced-motion: reduce) {\n  .ac-root {\n    --ac-dur: 1ms;\n    --ac-dur-slow: 1ms;\n  }\n}\n';
 
   // src/ui/base.css
   var base_default = `/* 全页无外壳布局 + 基础组件。所有选择器以 .ac-root 开头，不污染宿主。 */
@@ -2630,8 +2854,10 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  width: 100%;
-  height: 100%;
+  /* 向外覆盖安全区，让纸面铺到屏幕四边；安全区再用内边距加回页头/底栏 */
+  width: calc(100% + env(safe-area-inset-left) + env(safe-area-inset-right));
+  height: calc(100% + env(safe-area-inset-top) + env(safe-area-inset-bottom));
+  margin: calc(0px - env(safe-area-inset-top)) calc(0px - env(safe-area-inset-right)) calc(0px - env(safe-area-inset-bottom)) calc(0px - env(safe-area-inset-left));
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -2653,14 +2879,14 @@
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  opacity: 0.05;
+  opacity: 0.035;
   mix-blend-mode: multiply;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
   background-size: 140px 140px;
 }
 
 .ac-root[data-theme="dark"]::before {
-  opacity: 0.07;
+  opacity: 0.05;
   mix-blend-mode: screen;
 }
 
@@ -2685,7 +2911,7 @@
   align-items: center;
   gap: var(--ac-s3);
   min-height: 48px;
-  padding: var(--ac-s3) var(--ac-page-x) var(--ac-s2);
+  padding: calc(var(--ac-s3) + env(safe-area-inset-top)) max(var(--ac-page-x), env(safe-area-inset-right)) var(--ac-s2) max(var(--ac-page-x), env(safe-area-inset-left));
 }
 
 .ac-header--bordered {
@@ -2743,7 +2969,7 @@
   overflow-y: auto;
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
-  padding: 0 var(--ac-page-x) var(--ac-s6);
+  padding: 0 max(var(--ac-page-x), env(safe-area-inset-right)) var(--ac-s6) max(var(--ac-page-x), env(safe-area-inset-left));
 }
 
 .ac-body--flush {
@@ -2753,7 +2979,7 @@
 
 .ac-footer {
   flex: 0 0 auto;
-  padding: var(--ac-s3) var(--ac-page-x) var(--ac-s4);
+  padding: var(--ac-s3) max(var(--ac-page-x), env(safe-area-inset-right)) calc(var(--ac-s4) + env(safe-area-inset-bottom)) max(var(--ac-page-x), env(safe-area-inset-left));
   border-top: var(--ac-line-1);
   background: var(--ac-paper);
 }
@@ -2907,7 +3133,7 @@
 .ac-btn--primary {
   background: var(--ac-rose);
   color: #FFFFFF;
-  box-shadow: 0 2px 10px rgba(201, 96, 90, 0.22);
+  box-shadow: 0 2px 10px rgba(181, 113, 107, 0.18);
 }
 
 .ac-root[data-theme="dark"] .ac-btn--primary {
@@ -3175,7 +3401,7 @@
 `;
 
   // src/ui/views.css
-  var views_default = '/* 逐屏样式：首页倒计时 / 准备时间轴 / 信封 / 信件 / 贺卡 / 语音 / 设置 */\n\n/* ---------- 首页：倒计时主区 ---------- */\n\n.ac-hero {\n  padding: var(--ac-s5) 0 var(--ac-s4);\n  margin: 0 calc(0px - var(--ac-page-x));\n  padding-left: var(--ac-page-x);\n  padding-right: var(--ac-page-x);\n  background: linear-gradient(180deg, var(--ac-paper-3) 0%, transparent 100%);\n}\n\n.ac-hero__year {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: var(--ac-s3);\n}\n\n.ac-hero__who {\n  display: flex;\n  align-items: center;\n  gap: var(--ac-s3);\n  margin-top: var(--ac-s4);\n}\n\n.ac-hero__name {\n  font-size: var(--ac-body);\n  font-weight: 500;\n  letter-spacing: 0.01em;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.ac-count {\n  display: flex;\n  align-items: flex-end;\n  gap: 8px;\n  margin-top: var(--ac-s3);\n  color: var(--ac-ink);\n}\n\n.ac-count__num {\n  font-family: var(--ac-serif);\n  font-size: var(--ac-display);\n  line-height: var(--ac-leading-display);\n  letter-spacing: var(--ac-tracking-display);\n  font-weight: 600;\n  font-variant-numeric: tabular-nums;\n  font-feature-settings: "tnum" 1;\n  transition: opacity 260ms var(--ac-ease), transform 260ms var(--ac-ease);\n}\n\n.ac-count__num--flip {\n  opacity: 0;\n  transform: translateY(-12px);\n}\n\n.ac-count__unit {\n  padding-bottom: 14px;\n  font-size: var(--ac-small);\n  color: var(--ac-ink-2);\n  letter-spacing: var(--ac-tracking-cap);\n}\n\n.ac-count__unit--today {\n  font-family: var(--ac-serif);\n  font-size: 22px;\n  padding-bottom: 16px;\n  color: var(--ac-rose);\n  letter-spacing: 0.02em;\n}\n\n.ac-hero__meta {\n  display: flex;\n  align-items: center;\n  gap: var(--ac-s2);\n  flex-wrap: wrap;\n  margin-top: var(--ac-s3);\n  font-size: var(--ac-cap);\n  color: var(--ac-ink-2);\n}\n\n.ac-progress {\n  display: flex;\n  align-items: center;\n  gap: var(--ac-s3);\n  margin-top: var(--ac-s5);\n  padding-top: var(--ac-s4);\n  border-top: 1px solid var(--ac-line);\n}\n\n.ac-progress__line {\n  flex: 1 1 auto;\n  min-width: 0;\n  font-size: var(--ac-cap);\n  color: var(--ac-ink-2);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n/* ---------- 列表 ---------- */\n\n.ac-list {\n  margin-top: var(--ac-s3);\n}\n\n.ac-list__head {\n  display: flex;\n  align-items: baseline;\n  justify-content: space-between;\n  gap: var(--ac-s3);\n  padding: var(--ac-s5) 0 var(--ac-s2);\n}\n\n.ac-plan-row .ac-row__side {\n  font-variant-numeric: tabular-nums;\n}\n\n.ac-plan-row__days {\n  font-family: var(--ac-serif);\n  font-size: 17px;\n  color: var(--ac-ink);\n  letter-spacing: -0.01em;\n}\n\n.ac-plan-row__days--today {\n  color: var(--ac-rose);\n}\n\n.ac-plan-row__state {\n  width: 6px;\n  height: 6px;\n  border-radius: 50%;\n  background: var(--ac-line);\n}\n\n.ac-plan-row__state--on {\n  background: var(--ac-rose);\n}\n\n.ac-plan-row--sealed .ac-row__title::after {\n  content: "封";\n  margin-left: 6px;\n  font-size: 10px;\n  color: var(--ac-ink-3);\n  border: 1px solid var(--ac-line);\n  border-radius: 3px;\n  padding: 0 3px;\n  vertical-align: 1px;\n}\n\n/* ---------- 新建 / 编辑 ---------- */\n\n.ac-pills {\n  display: flex;\n  gap: var(--ac-s2);\n  overflow-x: auto;\n  padding: var(--ac-s2) 0 var(--ac-s3);\n  margin: 0 calc(0px - var(--ac-page-x));\n  padding-left: var(--ac-page-x);\n  padding-right: var(--ac-page-x);\n  scrollbar-width: none;\n}\n\n.ac-pills::-webkit-scrollbar {\n  display: none;\n}\n\n.ac-pill {\n  flex: 0 0 auto;\n  min-height: 34px;\n  padding: 0 14px;\n  border-radius: 999px;\n  border: 1px solid var(--ac-line);\n  background: transparent;\n  color: var(--ac-ink-2);\n  font-family: inherit;\n  font-size: var(--ac-small);\n  cursor: pointer;\n  transition: border-color var(--ac-dur) var(--ac-ease), color var(--ac-dur) var(--ac-ease), background var(--ac-dur) var(--ac-ease);\n}\n\n.ac-pill[aria-pressed="true"] {\n  border-color: var(--ac-rose);\n  color: var(--ac-rose);\n  background: var(--ac-rose-wash);\n}\n\n.ac-chars {\n  display: flex;\n  gap: var(--ac-s3);\n  overflow-x: auto;\n  padding: var(--ac-s2) 0 var(--ac-s3);\n  margin: 0 calc(0px - var(--ac-page-x));\n  padding-left: var(--ac-page-x);\n  padding-right: var(--ac-page-x);\n  scrollbar-width: none;\n}\n\n.ac-chars::-webkit-scrollbar {\n  display: none;\n}\n\n.ac-char {\n  flex: 0 0 auto;\n  width: 64px;\n  display: flex;\n  flex-direction: column;\n  align-items: center;\n  gap: 6px;\n  padding: 8px 2px;\n  border: 0;\n  background: transparent;\n  color: var(--ac-ink-2);\n  font-family: inherit;\n  cursor: pointer;\n}\n\n.ac-char .ac-avatar {\n  width: 48px;\n  height: 48px;\n  border-width: 2px;\n  border-color: transparent;\n  transition: border-color var(--ac-dur) var(--ac-ease), transform var(--ac-dur) var(--ac-ease);\n}\n\n.ac-char[aria-pressed="true"] .ac-avatar {\n  border-color: var(--ac-rose);\n  transform: scale(1.03);\n}\n\n.ac-char__name {\n  max-width: 100%;\n  font-size: var(--ac-micro);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.ac-char[aria-pressed="true"] .ac-char__name {\n  color: var(--ac-rose);\n}\n\n.ac-secrecy {\n  display: flex;\n  flex-direction: column;\n}\n\n.ac-secrecy__opt {\n  position: relative;\n  display: flex;\n  align-items: flex-start;\n  gap: var(--ac-s3);\n  width: 100%;\n  padding: var(--ac-s3) 0;\n  border: 0;\n  border-bottom: 1px solid var(--ac-line-soft);\n  background: transparent;\n  color: inherit;\n  font-family: inherit;\n  text-align: left;\n  cursor: pointer;\n}\n\n.ac-secrecy__bullet {\n  flex: 0 0 auto;\n  width: 8px;\n  height: 8px;\n  margin-top: 8px;\n  border-radius: 50%;\n  border: 1px solid var(--ac-line);\n  background: transparent;\n  transition: background var(--ac-dur) var(--ac-ease), border-color var(--ac-dur) var(--ac-ease), transform var(--ac-dur) var(--ac-ease);\n}\n\n.ac-secrecy__opt[aria-pressed="true"] .ac-secrecy__bullet {\n  background: var(--ac-rose);\n  border-color: var(--ac-rose);\n  transform: scale(1.1);\n}\n\n.ac-secrecy__title {\n  font-size: var(--ac-body);\n  font-weight: 500;\n}\n\n.ac-secrecy__desc {\n  margin-top: 2px;\n  font-size: var(--ac-cap);\n  color: var(--ac-ink-3);\n}\n\n.ac-candidates {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ac-s2);\n  margin-top: var(--ac-s3);\n}\n\n.ac-candidate {\n  display: flex;\n  align-items: flex-start;\n  gap: var(--ac-s3);\n  width: 100%;\n  padding: var(--ac-s3) var(--ac-s3) var(--ac-s3) var(--ac-s4);\n  border: var(--ac-line-1);\n  border-radius: var(--ac-radius);\n  background: var(--ac-paper-2);\n  box-shadow: var(--ac-shadow-1);\n  color: inherit;\n  font-family: inherit;\n  text-align: left;\n  cursor: pointer;\n  transition: border-color var(--ac-dur) var(--ac-ease);\n}\n\n.ac-candidate:active {\n  border-color: var(--ac-rose-soft);\n}\n\n.ac-candidate__date {\n  flex: 0 0 auto;\n  font-family: var(--ac-serif);\n  font-size: 15px;\n  letter-spacing: 0.01em;\n  font-variant-numeric: tabular-nums;\n}\n\n.ac-candidate__main {\n  flex: 1 1 auto;\n  min-width: 0;\n}\n\n.ac-candidate__title {\n  font-size: var(--ac-small);\n  font-weight: 500;\n}\n\n.ac-candidate__ev {\n  margin-top: 2px;\n  font-size: var(--ac-micro);\n  line-height: 1.5;\n  color: var(--ac-ink-3);\n  display: -webkit-box;\n  -webkit-line-clamp: 2;\n  -webkit-box-orient: vertical;\n  overflow: hidden;\n}\n\n.ac-conf {\n  display: flex;\n  gap: 3px;\n  flex: 0 0 auto;\n  padding-top: 4px;\n}\n\n.ac-conf i {\n  width: 4px;\n  height: 4px;\n  border-radius: 50%;\n  background: var(--ac-line);\n}\n\n.ac-conf i.on {\n  background: var(--ac-rose);\n}\n\n/* ---------- 详情 ---------- */\n\n.ac-band {\n  display: flex;\n  align-items: flex-end;\n  justify-content: space-between;\n  gap: var(--ac-s4);\n  padding: var(--ac-s4) 0 var(--ac-s5);\n  border-bottom: 1px solid var(--ac-line);\n}\n\n.ac-band__num {\n  font-family: var(--ac-serif);\n  font-size: clamp(34px, 12vw, 48px);\n  line-height: 1.05;\n  letter-spacing: -0.02em;\n  font-variant-numeric: tabular-nums;\n  font-feature-settings: "tnum" 1;\n}\n\n.ac-band__unit {\n  font-size: var(--ac-cap);\n  color: var(--ac-ink-2);\n  padding-bottom: 6px;\n  letter-spacing: var(--ac-tracking-cap);\n}\n\n.ac-band__side {\n  text-align: right;\n  font-size: var(--ac-cap);\n  color: var(--ac-ink-2);\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n  align-items: flex-end;\n}\n\n.ac-timeline {\n  position: relative;\n  margin-top: var(--ac-s4);\n  padding-left: 22px;\n}\n\n.ac-timeline::before {\n  content: "";\n  position: absolute;\n  left: 3px;\n  top: 6px;\n  bottom: 6px;\n  width: 1px;\n  background: var(--ac-line);\n}\n\n.ac-timeline__item {\n  position: relative;\n  padding: 0 0 var(--ac-s4);\n}\n\n.ac-timeline__item:last-child {\n  padding-bottom: 0;\n}\n\n.ac-timeline__dot {\n  position: absolute;\n  left: -22px;\n  top: 6px;\n  width: 7px;\n  height: 7px;\n  border-radius: 50%;\n  background: var(--ac-paper);\n  border: 1px solid var(--ac-line);\n  transition: background 260ms var(--ac-ease), border-color 260ms var(--ac-ease), transform 260ms var(--ac-ease);\n}\n\n.ac-timeline__item--on .ac-timeline__dot {\n  background: var(--ac-rose);\n  border-color: var(--ac-rose);\n  transform: scale(1.15);\n}\n\n.ac-timeline__when {\n  font-size: var(--ac-micro);\n  letter-spacing: var(--ac-tracking-cap);\n  color: var(--ac-ink-3);\n}\n\n.ac-timeline__text {\n  margin-top: 4px;\n  font-size: var(--ac-small);\n  line-height: 1.72;\n  color: var(--ac-ink);\n}\n\n.ac-timeline__item--masked .ac-timeline__text {\n  color: var(--ac-ink-3);\n  font-family: var(--ac-serif);\n  letter-spacing: 0.12em;\n}\n\n.ac-sealbar {\n  display: flex;\n  align-items: center;\n  gap: var(--ac-s3);\n  margin: var(--ac-s4) 0 0;\n  padding: var(--ac-s3) var(--ac-s4);\n  border: 1px dashed var(--ac-line);\n  border-radius: var(--ac-radius);\n  background: transparent;\n}\n\n.ac-sealbar__text {\n  flex: 1 1 auto;\n  min-width: 0;\n  font-size: var(--ac-cap);\n  color: var(--ac-ink-2);\n  line-height: 1.55;\n}\n\n/* ---------- 解锁：信封 ---------- */\n\n.ac-envelope-wrap {\n  display: flex;\n  flex-direction: column;\n  align-items: center;\n  gap: var(--ac-s4);\n  padding: var(--ac-s6) 0 var(--ac-s5);\n}\n\n.ac-envelope {\n  position: relative;\n  width: 100%;\n  max-width: 320px;\n  aspect-ratio: 1.55 / 1;\n  border-radius: 6px;\n  border: 1px solid var(--ac-line);\n  background: linear-gradient(165deg, var(--ac-rose-wash) 0%, var(--ac-paper-3) 100%);\n  box-shadow: var(--ac-shadow-2);\n  cursor: pointer;\n  overflow: hidden;\n  transition: transform var(--ac-dur) var(--ac-ease);\n}\n\n.ac-envelope:active {\n  transform: scale(0.99);\n}\n\n.ac-envelope__flap {\n  position: absolute;\n  left: 0;\n  right: 0;\n  top: 0;\n  height: 56%;\n  background: linear-gradient(180deg, var(--ac-paper-3), var(--ac-rose-wash));\n  clip-path: polygon(0 0, 100% 0, 50% 100%);\n  transform-origin: top center;\n  transition: transform var(--ac-dur-slow) var(--ac-ease);\n}\n\n.ac-envelope__paper {\n  position: absolute;\n  left: 10%;\n  right: 10%;\n  top: 24%;\n  padding: 12px 14px;\n  border-radius: 4px;\n  background: var(--ac-paper-2);\n  border: 1px solid var(--ac-line);\n  box-shadow: var(--ac-shadow-1);\n  transform: translateY(16%);\n  transition: transform var(--ac-dur-slow) var(--ac-ease) 80ms;\n}\n\n.ac-envelope__name {\n  font-size: var(--ac-micro);\n  letter-spacing: var(--ac-tracking-cap);\n  color: var(--ac-ink-3);\n}\n\n.ac-envelope__line {\n  margin-top: 6px;\n  font-family: var(--ac-serif);\n  font-size: 15px;\n  line-height: 1.6;\n  color: var(--ac-ink);\n  display: -webkit-box;\n  -webkit-line-clamp: 2;\n  -webkit-box-orient: vertical;\n  overflow: hidden;\n}\n\n.ac-envelope__seal {\n  position: absolute;\n  left: 50%;\n  top: 54%;\n  width: 40px;\n  height: 40px;\n  margin: -20px 0 0 -20px;\n  border-radius: 50%;\n  background: var(--ac-rose);\n  color: var(--ac-paper);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  font-family: var(--ac-serif);\n  font-size: 15px;\n  transition: opacity var(--ac-dur) var(--ac-ease);\n}\n\n.ac-envelope--open .ac-envelope__flap {\n  transform: rotateX(180deg);\n}\n\n.ac-envelope--open .ac-envelope__paper {\n  transform: translateY(-8%);\n}\n\n.ac-envelope--open .ac-envelope__seal {\n  opacity: 0;\n}\n\n.ac-envelope__hint {\n  font-size: var(--ac-micro);\n  letter-spacing: var(--ac-tracking-wide);\n  text-transform: uppercase;\n  color: var(--ac-ink-3);\n}\n\n/* ---------- 解锁：内容 ---------- */\n\n.ac-letter {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ac-s4);\n  padding-top: var(--ac-s4);\n}\n\n.ac-letter__block {\n  padding: var(--ac-s4);\n  border: var(--ac-line-1);\n  border-radius: var(--ac-radius);\n  background: var(--ac-paper-2);\n  box-shadow: var(--ac-shadow-1);\n  opacity: 0;\n  transform: translateY(6px);\n  animation: ac-rise 420ms var(--ac-ease) forwards;\n}\n\n.ac-letter__title {\n  font-size: var(--ac-micro);\n  letter-spacing: var(--ac-tracking-cap);\n  color: var(--ac-rose);\n  margin-bottom: 6px;\n}\n\n.ac-letter__body {\n  margin: 0;\n  font-family: var(--ac-serif);\n  font-size: var(--ac-body);\n  line-height: var(--ac-leading-letter);\n  color: var(--ac-ink);\n  white-space: pre-wrap;\n  word-break: break-word;\n}\n\n@keyframes ac-rise {\n  to {\n    opacity: 1;\n    transform: translateY(0);\n  }\n}\n\n.ac-gift {\n  margin-top: var(--ac-s5);\n  padding: var(--ac-s4);\n  border-left: 2px solid var(--ac-rose);\n  background: var(--ac-rose-wash);\n  border-radius: 0 var(--ac-radius) var(--ac-radius) 0;\n}\n\n.ac-gift__name {\n  font-family: var(--ac-serif);\n  font-size: var(--ac-h2);\n  letter-spacing: 0.01em;\n}\n\n.ac-gift__desc {\n  margin-top: 6px;\n  font-size: var(--ac-small);\n  line-height: 1.75;\n  color: var(--ac-ink-2);\n}\n\n.ac-details {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ac-s3);\n  margin-top: var(--ac-s3);\n}\n\n.ac-detail {\n  display: flex;\n  gap: var(--ac-s3);\n  font-size: var(--ac-small);\n  line-height: 1.7;\n  color: var(--ac-ink);\n}\n\n.ac-detail__mark {\n  flex: 0 0 auto;\n  width: 5px;\n  height: 5px;\n  margin-top: 9px;\n  border-radius: 50%;\n  background: var(--ac-gold);\n}\n\n.ac-memo {\n  margin-top: var(--ac-s4);\n}\n\n.ac-memo__item {\n  padding: var(--ac-s3) 0;\n  border-bottom: 1px solid var(--ac-line-soft);\n}\n\n.ac-memo__when {\n  font-size: var(--ac-micro);\n  letter-spacing: var(--ac-tracking-cap);\n  color: var(--ac-ink-3);\n}\n\n.ac-memo__text {\n  margin-top: 4px;\n  font-size: var(--ac-small);\n  line-height: 1.72;\n}\n\n/* ---------- 贺卡容器 ---------- */\n\n.ac-cardframe {\n  margin-top: var(--ac-s5);\n  border-radius: var(--ac-radius);\n  overflow: hidden;\n  background: transparent;\n}\n\n.ac-cardframe iframe {\n  display: block;\n  width: 100%;\n  height: 420px;\n  border: 0;\n  background: transparent;\n  transition: height 260ms var(--ac-ease);\n}\n\n.ac-cardnote {\n  margin-top: var(--ac-s2);\n  font-size: var(--ac-micro);\n  color: var(--ac-ink-3);\n  text-align: center;\n}\n\n/* ---------- 语音条 ---------- */\n\n.ac-audio {\n  display: flex;\n  align-items: center;\n  gap: var(--ac-s3);\n  margin-top: var(--ac-s5);\n  padding: var(--ac-s2) var(--ac-s3);\n  border: var(--ac-line-1);\n  border-radius: 999px;\n  background: var(--ac-paper-2);\n}\n\n.ac-audio__play {\n  flex: 0 0 auto;\n  width: 32px;\n  height: 32px;\n  border-radius: 50%;\n  border: 0;\n  background: var(--ac-rose);\n  color: #fff;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  cursor: pointer;\n  padding: 0;\n}\n\n.ac-audio__play svg {\n  width: 14px;\n  height: 14px;\n}\n\n.ac-audio__main {\n  flex: 1 1 auto;\n  min-width: 0;\n}\n\n.ac-audio__title {\n  font-size: var(--ac-cap);\n  color: var(--ac-ink);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.ac-audio__hint {\n  margin-top: 1px;\n  font-size: var(--ac-micro);\n  color: var(--ac-ink-3);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.ac-audio__wave {\n  display: flex;\n  align-items: center;\n  gap: 2px;\n  flex: 0 0 auto;\n  height: 18px;\n}\n\n.ac-audio__wave i {\n  width: 2px;\n  border-radius: 2px;\n  background: var(--ac-rose-soft);\n  opacity: 0.45;\n}\n\n.ac-audio__wave i:nth-child(1) { height: 6px; }\n.ac-audio__wave i:nth-child(2) { height: 12px; }\n.ac-audio__wave i:nth-child(3) { height: 8px; }\n.ac-audio__wave i:nth-child(4) { height: 16px; }\n.ac-audio__wave i:nth-child(5) { height: 10px; }\n.ac-audio__wave i:nth-child(6) { height: 14px; }\n\n.ac-audio--playing .ac-audio__wave i {\n  animation: ac-wave 900ms var(--ac-ease) infinite alternate;\n}\n\n.ac-audio--playing .ac-audio__wave i:nth-child(2n) {\n  animation-delay: 120ms;\n}\n\n@keyframes ac-wave {\n  from { opacity: 0.35; transform: scaleY(0.6); }\n  to { opacity: 0.9; transform: scaleY(1); }\n}\n\n/* ---------- 给明年 ---------- */\n\n.ac-noteyear {\n  margin-top: var(--ac-s6);\n  padding-top: var(--ac-s4);\n  border-top: 1px solid var(--ac-line);\n}\n\n.ac-noteyear__input {\n  width: 100%;\n  min-height: 34px;\n  margin-top: var(--ac-s2);\n  padding: 0 0 6px;\n  border: 0;\n  border-bottom: 1px solid var(--ac-line);\n  background: transparent;\n  color: var(--ac-ink);\n  font-family: var(--ac-serif);\n  font-size: var(--ac-body);\n  line-height: 1.6;\n}\n\n.ac-noteyear__input:focus {\n  outline: none;\n  border-bottom-color: var(--ac-rose-soft);\n}\n\n.ac-noteyear__saved {\n  margin-top: var(--ac-s2);\n  font-size: var(--ac-micro);\n  color: var(--ac-ok);\n}\n\n/* ---------- 设置 ---------- */\n\n.ac-group {\n  padding: var(--ac-s5) 0 var(--ac-s2);\n}\n\n.ac-group + .ac-group {\n  border-top: 1px solid var(--ac-line);\n  margin-top: var(--ac-s4);\n}\n\n.ac-group__title {\n  font-size: var(--ac-micro);\n  letter-spacing: var(--ac-tracking-wide);\n  text-transform: uppercase;\n  color: var(--ac-ink-3);\n  margin-bottom: var(--ac-s2);\n}\n\n.ac-styles {\n  display: grid;\n  grid-template-columns: repeat(3, minmax(0, 1fr));\n  gap: var(--ac-s2);\n  margin-top: var(--ac-s3);\n}\n\n.ac-style {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ac-s2);\n  padding: var(--ac-s2);\n  border: 1px solid var(--ac-line);\n  border-radius: var(--ac-radius);\n  background: var(--ac-paper-2);\n  color: var(--ac-ink-2);\n  font-family: inherit;\n  font-size: var(--ac-micro);\n  cursor: pointer;\n  transition: border-color var(--ac-dur) var(--ac-ease), color var(--ac-dur) var(--ac-ease);\n}\n\n.ac-style[aria-pressed="true"] {\n  border-color: var(--ac-rose);\n  color: var(--ac-rose);\n}\n\n.ac-style__thumb {\n  position: relative;\n  height: 52px;\n  border-radius: 4px;\n  overflow: hidden;\n  border: 1px solid var(--ac-line-soft);\n}\n\n.ac-style__thumb--envelope {\n  background: linear-gradient(165deg, #FBEFEC, #F3E3DE);\n}\n\n.ac-style__thumb--envelope::after {\n  content: "";\n  position: absolute;\n  inset: 0;\n  background: linear-gradient(180deg, #F3E3DE, #EBD6CF);\n  clip-path: polygon(0 0, 100% 0, 50% 62%);\n}\n\n.ac-style__thumb--polaroid {\n  background: #FFFDF9;\n  padding: 5px 5px 10px;\n}\n\n.ac-style__thumb--polaroid::after {\n  content: "";\n  position: absolute;\n  left: 5px;\n  right: 5px;\n  top: 5px;\n  bottom: 12px;\n  background: linear-gradient(160deg, #F7D9C9, #D98D7E);\n}\n\n.ac-style__thumb--starry {\n  background: radial-gradient(120% 90% at 70% 10%, #2B2A44, #12111C);\n}\n\n.ac-style__thumb--starry::after {\n  content: "";\n  position: absolute;\n  width: 12px;\n  height: 12px;\n  border-radius: 50%;\n  right: 16%;\n  top: 22%;\n  background: radial-gradient(circle at 36% 32%, #FFF6E2, #C9B08A);\n  box-shadow: 0 0 10px rgba(255, 236, 200, 0.5);\n}\n\n.ac-usage {\n  display: flex;\n  align-items: baseline;\n  gap: 6px;\n  margin-top: var(--ac-s3);\n  font-size: var(--ac-cap);\n  color: var(--ac-ink-3);\n  font-variant-numeric: tabular-nums;\n}\n\n.ac-usage strong {\n  font-family: var(--ac-serif);\n  font-size: 18px;\n  font-weight: 600;\n  color: var(--ac-ink);\n}\n\n.ac-stepper {\n  display: flex;\n  align-items: center;\n  gap: var(--ac-s2);\n}\n\n.ac-stepper button {\n  width: 32px;\n  height: 32px;\n  border-radius: 50%;\n  border: 1px solid var(--ac-line);\n  background: transparent;\n  color: var(--ac-ink-2);\n  font-size: 16px;\n  line-height: 1;\n  cursor: pointer;\n}\n\n.ac-stepper span {\n  min-width: 34px;\n  text-align: center;\n  font-variant-numeric: tabular-nums;\n  font-size: var(--ac-small);\n}\n\n/* ---------- 提示条 ---------- */\n\n.ac-note {\n  margin-top: var(--ac-s3);\n  padding: var(--ac-s2) var(--ac-s3);\n  border-radius: var(--ac-radius-sm);\n  background: var(--ac-paper-3);\n  font-size: var(--ac-cap);\n  line-height: 1.6;\n  color: var(--ac-ink-2);\n}\n\n.ac-note--warn {\n  background: var(--ac-rose-wash);\n  color: var(--ac-rose);\n}\n\n.ac-inline-actions {\n  display: flex;\n  gap: var(--ac-s2);\n  margin-top: var(--ac-s3);\n}\n\n.ac-inline-actions .ac-btn {\n  flex: 1 1 0;\n}\n\n/* ---------- 聊天卡片（不依赖 .ac-root 的变量，独立可读） ---------- */\n\n.ac-card {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  width: 100%;\n  min-width: 180px;\n  max-width: 260px;\n  padding: 10px 12px;\n  border: 1px solid #E6DCD2;\n  border-radius: 12px;\n  background: #FFFDF9;\n  color: #2B2320;\n  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;\n  font-size: 14px;\n  line-height: 1.4;\n  text-align: left;\n  cursor: pointer;\n  -webkit-tap-highlight-color: transparent;\n  transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);\n}\n\n.ac-card:active {\n  transform: scale(0.985);\n}\n\n.ac-card__avatar {\n  flex: 0 0 auto;\n  width: 32px;\n  height: 32px;\n  border-radius: 50%;\n  overflow: hidden;\n  background: #F3ECE4;\n  color: #9C8A81;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  font-family: "Songti SC", serif;\n  font-size: 13px;\n}\n\n.ac-card__avatar img {\n  width: 100%;\n  height: 100%;\n  object-fit: cover;\n  display: block;\n}\n\n.ac-card__main {\n  flex: 1 1 auto;\n  min-width: 0;\n}\n\n.ac-card__title {\n  font-size: 14px;\n  font-weight: 500;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.ac-card__sub {\n  margin-top: 2px;\n  font-size: 11px;\n  color: #9C8A81;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.ac-card__act {\n  flex: 0 0 auto;\n  padding: 4px 10px;\n  border-radius: 999px;\n  background: #FBEFEC;\n  color: #C9605A;\n  font-size: 11px;\n  letter-spacing: 0.04em;\n}\n\n@media (prefers-color-scheme: dark) {\n  .ac-card {\n    border-color: #332A25;\n    background: #1F1A17;\n    color: #F5EFE8;\n  }\n\n  .ac-card__avatar {\n    background: #2A2320;\n    color: #8C7D74;\n  }\n\n  .ac-card__sub {\n    color: #8C7D74;\n  }\n\n  .ac-card__act {\n    background: #2A1B19;\n    color: #E08A83;\n  }\n}\n';
+  var views_default = '/* 逐屏样式：首页倒计时 / 准备时间轴 / 信封 / 信件 / 贺卡 / 语音 / 设置 */\n\n/* ---------- 首页：倒计时主区 ---------- */\n\n.ac-hero {\n  padding: var(--ac-s5) 0 var(--ac-s4);\n  background: transparent;\n}\n\n.ac-hero__year {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: var(--ac-s3);\n}\n\n.ac-hero__who {\n  display: flex;\n  align-items: center;\n  gap: var(--ac-s3);\n  margin-top: var(--ac-s4);\n}\n\n.ac-hero__name {\n  font-size: var(--ac-body);\n  font-weight: 500;\n  letter-spacing: 0.01em;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.ac-count {\n  display: flex;\n  align-items: flex-end;\n  gap: 8px;\n  margin-top: var(--ac-s3);\n  color: var(--ac-ink);\n}\n\n.ac-count__num {\n  font-family: var(--ac-serif);\n  font-size: var(--ac-display);\n  line-height: var(--ac-leading-display);\n  letter-spacing: var(--ac-tracking-display);\n  font-weight: 600;\n  font-variant-numeric: tabular-nums;\n  font-feature-settings: "tnum" 1;\n  transition: opacity 260ms var(--ac-ease), transform 260ms var(--ac-ease);\n}\n\n.ac-count__num--flip {\n  opacity: 0;\n  transform: translateY(-12px);\n}\n\n.ac-count__unit {\n  padding-bottom: 14px;\n  font-size: var(--ac-small);\n  color: var(--ac-ink-2);\n  letter-spacing: var(--ac-tracking-cap);\n}\n\n.ac-count__unit--today {\n  font-family: var(--ac-serif);\n  font-size: 22px;\n  padding-bottom: 16px;\n  color: var(--ac-rose);\n  letter-spacing: 0.02em;\n}\n\n.ac-hero__meta {\n  display: flex;\n  align-items: center;\n  gap: var(--ac-s2);\n  flex-wrap: wrap;\n  margin-top: var(--ac-s3);\n  font-size: var(--ac-cap);\n  color: var(--ac-ink-2);\n}\n\n.ac-progress {\n  display: flex;\n  align-items: center;\n  gap: var(--ac-s3);\n  margin-top: var(--ac-s5);\n  padding-top: var(--ac-s4);\n  border-top: 1px solid var(--ac-line);\n}\n\n.ac-progress__line {\n  flex: 1 1 auto;\n  min-width: 0;\n  font-size: var(--ac-cap);\n  color: var(--ac-ink-2);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n/* ---------- 列表 ---------- */\n\n.ac-list {\n  margin-top: var(--ac-s3);\n}\n\n.ac-list__head {\n  display: flex;\n  align-items: baseline;\n  justify-content: space-between;\n  gap: var(--ac-s3);\n  padding: var(--ac-s5) 0 var(--ac-s2);\n}\n\n.ac-plan-row .ac-row__side {\n  font-variant-numeric: tabular-nums;\n}\n\n.ac-plan-row__days {\n  font-family: var(--ac-serif);\n  font-size: 17px;\n  color: var(--ac-ink);\n  letter-spacing: -0.01em;\n}\n\n.ac-plan-row__days--today {\n  color: var(--ac-rose);\n}\n\n.ac-plan-row__state {\n  width: 6px;\n  height: 6px;\n  border-radius: 50%;\n  background: var(--ac-line);\n}\n\n.ac-plan-row__state--on {\n  background: var(--ac-rose);\n}\n\n.ac-plan-row--sealed .ac-row__title::after {\n  content: "封";\n  margin-left: 6px;\n  font-size: 10px;\n  color: var(--ac-ink-3);\n  border: 1px solid var(--ac-line);\n  border-radius: 3px;\n  padding: 0 3px;\n  vertical-align: 1px;\n}\n\n/* ---------- 新建 / 编辑 ---------- */\n\n.ac-pills {\n  display: flex;\n  gap: var(--ac-s2);\n  overflow-x: auto;\n  padding: var(--ac-s2) 0 var(--ac-s3);\n  margin: 0 calc(0px - var(--ac-page-x));\n  padding-left: var(--ac-page-x);\n  padding-right: var(--ac-page-x);\n  scrollbar-width: none;\n}\n\n.ac-pills::-webkit-scrollbar {\n  display: none;\n}\n\n.ac-pill {\n  flex: 0 0 auto;\n  min-height: 34px;\n  padding: 0 14px;\n  border-radius: 999px;\n  border: 1px solid var(--ac-line);\n  background: transparent;\n  color: var(--ac-ink-2);\n  font-family: inherit;\n  font-size: var(--ac-small);\n  cursor: pointer;\n  transition: border-color var(--ac-dur) var(--ac-ease), color var(--ac-dur) var(--ac-ease), background var(--ac-dur) var(--ac-ease);\n}\n\n.ac-pill[aria-pressed="true"] {\n  border-color: var(--ac-rose);\n  color: var(--ac-rose);\n  background: var(--ac-rose-wash);\n}\n\n.ac-chars {\n  display: flex;\n  gap: var(--ac-s3);\n  overflow-x: auto;\n  padding: var(--ac-s2) 0 var(--ac-s3);\n  margin: 0 calc(0px - var(--ac-page-x));\n  padding-left: var(--ac-page-x);\n  padding-right: var(--ac-page-x);\n  scrollbar-width: none;\n}\n\n.ac-chars::-webkit-scrollbar {\n  display: none;\n}\n\n.ac-char {\n  flex: 0 0 auto;\n  width: 64px;\n  display: flex;\n  flex-direction: column;\n  align-items: center;\n  gap: 6px;\n  padding: 8px 2px;\n  border: 0;\n  background: transparent;\n  color: var(--ac-ink-2);\n  font-family: inherit;\n  cursor: pointer;\n}\n\n.ac-char .ac-avatar {\n  width: 48px;\n  height: 48px;\n  border-width: 2px;\n  border-color: transparent;\n  transition: border-color var(--ac-dur) var(--ac-ease), transform var(--ac-dur) var(--ac-ease);\n}\n\n.ac-char[aria-pressed="true"] .ac-avatar {\n  border-color: var(--ac-rose);\n  transform: scale(1.03);\n}\n\n.ac-char__name {\n  max-width: 100%;\n  font-size: var(--ac-micro);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.ac-char[aria-pressed="true"] .ac-char__name {\n  color: var(--ac-rose);\n}\n\n.ac-secrecy {\n  display: flex;\n  flex-direction: column;\n}\n\n.ac-secrecy__opt {\n  position: relative;\n  display: flex;\n  align-items: flex-start;\n  gap: var(--ac-s3);\n  width: 100%;\n  padding: var(--ac-s3) 0;\n  border: 0;\n  border-bottom: 1px solid var(--ac-line-soft);\n  background: transparent;\n  color: inherit;\n  font-family: inherit;\n  text-align: left;\n  cursor: pointer;\n}\n\n.ac-secrecy__bullet {\n  flex: 0 0 auto;\n  width: 8px;\n  height: 8px;\n  margin-top: 8px;\n  border-radius: 50%;\n  border: 1px solid var(--ac-line);\n  background: transparent;\n  transition: background var(--ac-dur) var(--ac-ease), border-color var(--ac-dur) var(--ac-ease), transform var(--ac-dur) var(--ac-ease);\n}\n\n.ac-secrecy__opt[aria-pressed="true"] .ac-secrecy__bullet {\n  background: var(--ac-rose);\n  border-color: var(--ac-rose);\n  transform: scale(1.1);\n}\n\n.ac-secrecy__title {\n  font-size: var(--ac-body);\n  font-weight: 500;\n}\n\n.ac-secrecy__desc {\n  margin-top: 2px;\n  font-size: var(--ac-cap);\n  color: var(--ac-ink-3);\n}\n\n.ac-candidates {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ac-s2);\n  margin-top: var(--ac-s3);\n}\n\n.ac-candidate {\n  display: flex;\n  align-items: flex-start;\n  gap: var(--ac-s3);\n  width: 100%;\n  padding: var(--ac-s3) var(--ac-s3) var(--ac-s3) var(--ac-s4);\n  border: var(--ac-line-1);\n  border-radius: var(--ac-radius);\n  background: var(--ac-paper-2);\n  box-shadow: var(--ac-shadow-1);\n  color: inherit;\n  font-family: inherit;\n  text-align: left;\n  cursor: pointer;\n  transition: border-color var(--ac-dur) var(--ac-ease);\n}\n\n.ac-candidate:active {\n  border-color: var(--ac-rose-soft);\n}\n\n.ac-candidate__date {\n  flex: 0 0 auto;\n  font-family: var(--ac-serif);\n  font-size: 15px;\n  letter-spacing: 0.01em;\n  font-variant-numeric: tabular-nums;\n}\n\n.ac-candidate__main {\n  flex: 1 1 auto;\n  min-width: 0;\n}\n\n.ac-candidate__title {\n  font-size: var(--ac-small);\n  font-weight: 500;\n}\n\n.ac-candidate__ev {\n  margin-top: 2px;\n  font-size: var(--ac-micro);\n  line-height: 1.5;\n  color: var(--ac-ink-3);\n  display: -webkit-box;\n  -webkit-line-clamp: 2;\n  -webkit-box-orient: vertical;\n  overflow: hidden;\n}\n\n.ac-conf {\n  display: flex;\n  gap: 3px;\n  flex: 0 0 auto;\n  padding-top: 4px;\n}\n\n.ac-conf i {\n  width: 4px;\n  height: 4px;\n  border-radius: 50%;\n  background: var(--ac-line);\n}\n\n.ac-conf i.on {\n  background: var(--ac-rose);\n}\n\n/* ---------- 详情 ---------- */\n\n.ac-band {\n  display: flex;\n  align-items: flex-end;\n  justify-content: space-between;\n  gap: var(--ac-s4);\n  padding: var(--ac-s4) 0 var(--ac-s5);\n  border-bottom: 1px solid var(--ac-line);\n}\n\n.ac-band__num {\n  font-family: var(--ac-serif);\n  font-size: clamp(34px, 12vw, 48px);\n  line-height: 1.05;\n  letter-spacing: -0.02em;\n  font-variant-numeric: tabular-nums;\n  font-feature-settings: "tnum" 1;\n}\n\n.ac-band__unit {\n  font-size: var(--ac-cap);\n  color: var(--ac-ink-2);\n  padding-bottom: 6px;\n  letter-spacing: var(--ac-tracking-cap);\n}\n\n.ac-band__side {\n  text-align: right;\n  font-size: var(--ac-cap);\n  color: var(--ac-ink-2);\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n  align-items: flex-end;\n}\n\n.ac-timeline {\n  position: relative;\n  margin-top: var(--ac-s4);\n  padding-left: 22px;\n}\n\n.ac-timeline::before {\n  content: "";\n  position: absolute;\n  left: 3px;\n  top: 6px;\n  bottom: 6px;\n  width: 1px;\n  background: var(--ac-line);\n}\n\n.ac-timeline__item {\n  position: relative;\n  padding: 0 0 var(--ac-s4);\n}\n\n.ac-timeline__item:last-child {\n  padding-bottom: 0;\n}\n\n.ac-timeline__dot {\n  position: absolute;\n  left: -22px;\n  top: 6px;\n  width: 7px;\n  height: 7px;\n  border-radius: 50%;\n  background: var(--ac-paper);\n  border: 1px solid var(--ac-line);\n  transition: background 260ms var(--ac-ease), border-color 260ms var(--ac-ease), transform 260ms var(--ac-ease);\n}\n\n.ac-timeline__item--on .ac-timeline__dot {\n  background: var(--ac-rose);\n  border-color: var(--ac-rose);\n  transform: scale(1.15);\n}\n\n.ac-timeline__when {\n  font-size: var(--ac-micro);\n  letter-spacing: var(--ac-tracking-cap);\n  color: var(--ac-ink-3);\n}\n\n.ac-timeline__text {\n  margin-top: 4px;\n  font-size: var(--ac-small);\n  line-height: 1.72;\n  color: var(--ac-ink);\n}\n\n.ac-timeline__item--masked .ac-timeline__text {\n  color: var(--ac-ink-3);\n  font-family: var(--ac-serif);\n  letter-spacing: 0.12em;\n}\n\n.ac-sealbar {\n  display: flex;\n  align-items: center;\n  gap: var(--ac-s3);\n  margin: var(--ac-s4) 0 0;\n  padding: var(--ac-s3) var(--ac-s4);\n  border: 1px dashed var(--ac-line);\n  border-radius: var(--ac-radius);\n  background: transparent;\n}\n\n.ac-sealbar__text {\n  flex: 1 1 auto;\n  min-width: 0;\n  font-size: var(--ac-cap);\n  color: var(--ac-ink-2);\n  line-height: 1.55;\n}\n\n/* ---------- 解锁：信封 ---------- */\n\n.ac-envelope-wrap {\n  display: flex;\n  flex-direction: column;\n  align-items: center;\n  gap: var(--ac-s4);\n  padding: var(--ac-s6) 0 var(--ac-s5);\n}\n\n.ac-envelope {\n  position: relative;\n  width: 100%;\n  max-width: 320px;\n  aspect-ratio: 1.55 / 1;\n  border-radius: 6px;\n  border: 1px solid var(--ac-line);\n  background: linear-gradient(165deg, var(--ac-rose-wash) 0%, var(--ac-paper-3) 100%);\n  box-shadow: var(--ac-shadow-2);\n  cursor: pointer;\n  overflow: hidden;\n  transition: transform var(--ac-dur) var(--ac-ease);\n}\n\n.ac-envelope:active {\n  transform: scale(0.99);\n}\n\n.ac-envelope__flap {\n  position: absolute;\n  left: 0;\n  right: 0;\n  top: 0;\n  height: 56%;\n  background: linear-gradient(180deg, var(--ac-paper-3), var(--ac-rose-wash));\n  clip-path: polygon(0 0, 100% 0, 50% 100%);\n  transform-origin: top center;\n  transition: transform var(--ac-dur-slow) var(--ac-ease);\n}\n\n.ac-envelope__paper {\n  position: absolute;\n  left: 10%;\n  right: 10%;\n  top: 24%;\n  padding: 12px 14px;\n  border-radius: 4px;\n  background: var(--ac-paper-2);\n  border: 1px solid var(--ac-line);\n  box-shadow: var(--ac-shadow-1);\n  transform: translateY(16%);\n  transition: transform var(--ac-dur-slow) var(--ac-ease) 80ms;\n}\n\n.ac-envelope__name {\n  font-size: var(--ac-micro);\n  letter-spacing: var(--ac-tracking-cap);\n  color: var(--ac-ink-3);\n}\n\n.ac-envelope__line {\n  margin-top: 6px;\n  font-family: var(--ac-serif);\n  font-size: 15px;\n  line-height: 1.6;\n  color: var(--ac-ink);\n  display: -webkit-box;\n  -webkit-line-clamp: 2;\n  -webkit-box-orient: vertical;\n  overflow: hidden;\n}\n\n.ac-envelope__seal {\n  position: absolute;\n  left: 50%;\n  top: 54%;\n  width: 40px;\n  height: 40px;\n  margin: -20px 0 0 -20px;\n  border-radius: 50%;\n  background: var(--ac-rose);\n  color: var(--ac-paper);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  font-family: var(--ac-serif);\n  font-size: 15px;\n  transition: opacity var(--ac-dur) var(--ac-ease);\n}\n\n.ac-envelope--open .ac-envelope__flap {\n  transform: rotateX(180deg);\n}\n\n.ac-envelope--open .ac-envelope__paper {\n  transform: translateY(-8%);\n}\n\n.ac-envelope--open .ac-envelope__seal {\n  opacity: 0;\n}\n\n.ac-envelope__hint {\n  font-size: var(--ac-micro);\n  letter-spacing: var(--ac-tracking-wide);\n  text-transform: uppercase;\n  color: var(--ac-ink-3);\n}\n\n/* ---------- 解锁：内容 ---------- */\n\n.ac-letter {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ac-s4);\n  padding-top: var(--ac-s4);\n}\n\n.ac-letter__block {\n  padding: var(--ac-s4);\n  border: var(--ac-line-1);\n  border-radius: var(--ac-radius);\n  background: var(--ac-paper-2);\n  box-shadow: var(--ac-shadow-1);\n  opacity: 0;\n  transform: translateY(6px);\n  animation: ac-rise 420ms var(--ac-ease) forwards;\n}\n\n.ac-letter__title {\n  font-size: var(--ac-micro);\n  letter-spacing: var(--ac-tracking-cap);\n  color: var(--ac-rose);\n  margin-bottom: 6px;\n}\n\n.ac-letter__body {\n  margin: 0;\n  font-family: var(--ac-serif);\n  font-size: var(--ac-body);\n  line-height: var(--ac-leading-letter);\n  color: var(--ac-ink);\n  white-space: pre-wrap;\n  word-break: break-word;\n}\n\n@keyframes ac-rise {\n  to {\n    opacity: 1;\n    transform: translateY(0);\n  }\n}\n\n.ac-gift {\n  margin-top: var(--ac-s5);\n  padding: var(--ac-s4);\n  border: 1px solid var(--ac-line);\n  border-left: 2px solid var(--ac-rose);\n  background: var(--ac-paper-2);\n  border-radius: var(--ac-radius-sm);\n}\n\n.ac-gift__name {\n  font-family: var(--ac-serif);\n  font-size: var(--ac-h2);\n  letter-spacing: 0.01em;\n}\n\n.ac-gift__desc {\n  margin-top: 6px;\n  font-size: var(--ac-small);\n  line-height: 1.75;\n  color: var(--ac-ink-2);\n}\n\n.ac-details {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ac-s3);\n  margin-top: var(--ac-s3);\n}\n\n.ac-detail {\n  display: flex;\n  gap: var(--ac-s3);\n  font-size: var(--ac-small);\n  line-height: 1.7;\n  color: var(--ac-ink);\n}\n\n.ac-detail__mark {\n  flex: 0 0 auto;\n  width: 5px;\n  height: 5px;\n  margin-top: 9px;\n  border-radius: 50%;\n  background: var(--ac-gold);\n}\n\n.ac-memo {\n  margin-top: var(--ac-s4);\n}\n\n.ac-memo__item {\n  padding: var(--ac-s3) 0;\n  border-bottom: 1px solid var(--ac-line-soft);\n}\n\n.ac-memo__when {\n  font-size: var(--ac-micro);\n  letter-spacing: var(--ac-tracking-cap);\n  color: var(--ac-ink-3);\n}\n\n.ac-memo__text {\n  margin-top: 4px;\n  font-size: var(--ac-small);\n  line-height: 1.72;\n}\n\n/* ---------- 贺卡容器 ---------- */\n\n.ac-cardframe {\n  margin-top: var(--ac-s5);\n  border-radius: var(--ac-radius);\n  overflow: hidden;\n  background: transparent;\n}\n\n.ac-cardframe--thumb {\n  max-width: 320px;\n  margin: 0 auto;\n}\n\n.ac-cardframe iframe {\n  display: block;\n  width: 100%;\n  height: 420px;\n  border: 0;\n  background: transparent;\n  transition: height 260ms var(--ac-ease);\n}\n\n.ac-cardnote {\n  margin-top: var(--ac-s2);\n  font-size: var(--ac-micro);\n  color: var(--ac-ink-3);\n  text-align: center;\n}\n\n/* ---------- 语音条 ---------- */\n\n.ac-audio {\n  display: flex;\n  align-items: center;\n  gap: var(--ac-s3);\n  margin-top: var(--ac-s5);\n  padding: var(--ac-s2) var(--ac-s3);\n  border: var(--ac-line-1);\n  border-radius: 999px;\n  background: var(--ac-paper-2);\n}\n\n.ac-audio__play {\n  flex: 0 0 auto;\n  width: 32px;\n  height: 32px;\n  border-radius: 50%;\n  border: 0;\n  background: var(--ac-rose);\n  color: #fff;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  cursor: pointer;\n  padding: 0;\n}\n\n.ac-audio__play svg {\n  width: 14px;\n  height: 14px;\n}\n\n.ac-audio__main {\n  flex: 1 1 auto;\n  min-width: 0;\n}\n\n.ac-audio__title {\n  font-size: var(--ac-cap);\n  color: var(--ac-ink);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.ac-audio__hint {\n  margin-top: 1px;\n  font-size: var(--ac-micro);\n  color: var(--ac-ink-3);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.ac-audio__wave {\n  display: flex;\n  align-items: center;\n  gap: 2px;\n  flex: 0 0 auto;\n  height: 18px;\n}\n\n.ac-audio__wave i {\n  width: 2px;\n  border-radius: 2px;\n  background: var(--ac-rose-soft);\n  opacity: 0.45;\n}\n\n.ac-audio__wave i:nth-child(1) { height: 6px; }\n.ac-audio__wave i:nth-child(2) { height: 12px; }\n.ac-audio__wave i:nth-child(3) { height: 8px; }\n.ac-audio__wave i:nth-child(4) { height: 16px; }\n.ac-audio__wave i:nth-child(5) { height: 10px; }\n.ac-audio__wave i:nth-child(6) { height: 14px; }\n\n.ac-audio--playing .ac-audio__wave i {\n  animation: ac-wave 900ms var(--ac-ease) infinite alternate;\n}\n\n.ac-audio--playing .ac-audio__wave i:nth-child(2n) {\n  animation-delay: 120ms;\n}\n\n@keyframes ac-wave {\n  from { opacity: 0.35; transform: scaleY(0.6); }\n  to { opacity: 0.9; transform: scaleY(1); }\n}\n\n/* ---------- 给明年 ---------- */\n\n.ac-noteyear {\n  margin-top: var(--ac-s6);\n  padding-top: var(--ac-s4);\n  border-top: 1px solid var(--ac-line);\n}\n\n.ac-noteyear__input {\n  width: 100%;\n  min-height: 34px;\n  margin-top: var(--ac-s2);\n  padding: 0 0 6px;\n  border: 0;\n  border-bottom: 1px solid var(--ac-line);\n  background: transparent;\n  color: var(--ac-ink);\n  font-family: var(--ac-serif);\n  font-size: var(--ac-body);\n  line-height: 1.6;\n}\n\n.ac-noteyear__input:focus {\n  outline: none;\n  border-bottom-color: var(--ac-rose-soft);\n}\n\n.ac-noteyear__saved {\n  margin-top: var(--ac-s2);\n  font-size: var(--ac-micro);\n  color: var(--ac-ok);\n}\n\n/* ---------- 设置 ---------- */\n\n.ac-group {\n  padding: var(--ac-s5) 0 var(--ac-s2);\n}\n\n.ac-group + .ac-group {\n  border-top: 1px solid var(--ac-line);\n  margin-top: var(--ac-s4);\n}\n\n.ac-group__title {\n  font-size: var(--ac-micro);\n  letter-spacing: var(--ac-tracking-wide);\n  text-transform: uppercase;\n  color: var(--ac-ink-3);\n  margin-bottom: var(--ac-s2);\n}\n\n.ac-styles {\n  display: grid;\n  grid-template-columns: repeat(3, minmax(0, 1fr));\n  gap: var(--ac-s2);\n  margin-top: var(--ac-s3);\n}\n\n.ac-style {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ac-s2);\n  padding: var(--ac-s2);\n  border: 1px solid var(--ac-line);\n  border-radius: var(--ac-radius);\n  background: var(--ac-paper-2);\n  color: var(--ac-ink-2);\n  font-family: inherit;\n  font-size: var(--ac-micro);\n  cursor: pointer;\n  transition: border-color var(--ac-dur) var(--ac-ease), color var(--ac-dur) var(--ac-ease);\n}\n\n.ac-style[aria-pressed="true"] {\n  border-color: var(--ac-rose);\n  color: var(--ac-rose);\n}\n\n.ac-style__thumb {\n  position: relative;\n  height: 52px;\n  border-radius: 4px;\n  overflow: hidden;\n  border: 1px solid var(--ac-line-soft);\n}\n\n.ac-style__thumb--envelope {\n  background: linear-gradient(165deg, #F7F3EE, #EFEAE3);\n}\n\n.ac-style__thumb--envelope::after {\n  content: "";\n  position: absolute;\n  inset: 0;\n  background: linear-gradient(180deg, #EFEAE3, #E5DED5);\n  clip-path: polygon(0 0, 100% 0, 50% 62%);\n}\n\n.ac-style__thumb--polaroid {\n  background: #FFFFFF;\n  padding: 5px 5px 10px;\n}\n\n.ac-style__thumb--polaroid::after {\n  content: "";\n  position: absolute;\n  left: 5px;\n  right: 5px;\n  top: 5px;\n  bottom: 12px;\n  background: linear-gradient(160deg, #E9D9CF, #C4938A);\n}\n\n.ac-style__thumb--starry {\n  background: radial-gradient(120% 90% at 70% 10%, #2B2A44, #12111C);\n}\n\n.ac-style__thumb--starry::after {\n  content: "";\n  position: absolute;\n  width: 12px;\n  height: 12px;\n  border-radius: 50%;\n  right: 16%;\n  top: 22%;\n  background: radial-gradient(circle at 36% 32%, #FFF6E2, #C9B08A);\n  box-shadow: 0 0 10px rgba(255, 236, 200, 0.5);\n}\n\n.ac-usage {\n  display: flex;\n  align-items: baseline;\n  gap: 6px;\n  margin-top: var(--ac-s3);\n  font-size: var(--ac-cap);\n  color: var(--ac-ink-3);\n  font-variant-numeric: tabular-nums;\n}\n\n.ac-usage strong {\n  font-family: var(--ac-serif);\n  font-size: 18px;\n  font-weight: 600;\n  color: var(--ac-ink);\n}\n\n.ac-stepper {\n  display: flex;\n  align-items: center;\n  gap: var(--ac-s2);\n}\n\n.ac-stepper button {\n  width: 32px;\n  height: 32px;\n  border-radius: 50%;\n  border: 1px solid var(--ac-line);\n  background: transparent;\n  color: var(--ac-ink-2);\n  font-size: 16px;\n  line-height: 1;\n  cursor: pointer;\n}\n\n.ac-stepper span {\n  min-width: 34px;\n  text-align: center;\n  font-variant-numeric: tabular-nums;\n  font-size: var(--ac-small);\n}\n\n/* ---------- 提示条 ---------- */\n\n.ac-note {\n  margin-top: var(--ac-s3);\n  padding: var(--ac-s2) var(--ac-s3);\n  border-radius: var(--ac-radius-sm);\n  background: var(--ac-paper-3);\n  font-size: var(--ac-cap);\n  line-height: 1.6;\n  color: var(--ac-ink-2);\n}\n\n.ac-note--warn {\n  background: var(--ac-rose-wash);\n  color: var(--ac-rose);\n}\n\n.ac-inline-actions {\n  display: flex;\n  gap: var(--ac-s2);\n  margin-top: var(--ac-s3);\n}\n\n.ac-inline-actions .ac-btn {\n  flex: 1 1 0;\n}\n\n/* ---------- 提示词页 ---------- */\n\n.ac-prompt-row {\n  align-items: flex-start;\n  padding-top: var(--ac-s4);\n  padding-bottom: var(--ac-s4);\n}\n\n.ac-prompt-row .ac-row__title {\n  font-size: var(--ac-body);\n}\n\n.ac-prompt-state {\n  flex: 0 0 auto;\n  padding: 2px 6px;\n  border: 1px solid var(--ac-line);\n  border-radius: 4px;\n  font-size: var(--ac-micro);\n  line-height: 1.5;\n  color: var(--ac-ink-3);\n  white-space: nowrap;\n}\n\n.ac-prompt-state--on {\n  color: var(--ac-rose);\n  border-color: var(--ac-rose-soft);\n}\n\n.ac-prompt-field {\n  margin-top: var(--ac-s5);\n}\n\n.ac-prompt-label {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: var(--ac-s2);\n  font-size: var(--ac-micro);\n  letter-spacing: var(--ac-tracking-cap);\n  color: var(--ac-ink-3);\n}\n\n.ac-prompt-area {\n  display: block;\n  width: 100%;\n  min-height: 148px;\n  margin-top: var(--ac-s2);\n  padding: 12px;\n  border: 1px solid var(--ac-line);\n  border-radius: var(--ac-radius-sm);\n  background: var(--ac-paper-2);\n  color: var(--ac-ink);\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n  font-size: 12.5px;\n  line-height: 1.7;\n  resize: vertical;\n  outline: none;\n  transition: border-color var(--ac-dur) var(--ac-ease);\n}\n\n.ac-prompt-area:focus {\n  border-color: var(--ac-rose-soft);\n}\n\n.ac-prompt-area--short {\n  min-height: 84px;\n}\n\n.ac-chips {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 6px;\n  margin-top: var(--ac-s2);\n}\n\n.ac-chip {\n  min-height: 28px;\n  padding: 0 10px;\n  border-radius: 999px;\n  border: 1px solid var(--ac-line);\n  background: transparent;\n  color: var(--ac-ink-2);\n  font-family: inherit;\n  font-size: var(--ac-micro);\n  cursor: pointer;\n}\n\n.ac-chip:active {\n  background: var(--ac-paper-3);\n  color: var(--ac-ink);\n}\n\n.ac-preview {\n  margin-top: var(--ac-s3);\n  padding: var(--ac-s3);\n  max-height: 320px;\n  overflow: auto;\n  border: 1px solid var(--ac-line);\n  border-radius: var(--ac-radius-sm);\n  background: var(--ac-paper-3);\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n  font-size: 11.5px;\n  line-height: 1.75;\n  color: var(--ac-ink-2);\n  white-space: pre-wrap;\n  word-break: break-word;\n}\n\n.ac-preview__role {\n  color: var(--ac-rose);\n  font-weight: 600;\n}\n\n.ac-preview__meta {\n  display: flex;\n  justify-content: space-between;\n  gap: var(--ac-s2);\n  margin-top: 6px;\n  font-size: var(--ac-micro);\n  color: var(--ac-ink-3);\n}\n\n/* ---------- 卡片预览弹层（挂在插件根节点内，不碰 body） ---------- */\n\n.ac-overlay {\n  position: absolute;\n  inset: 0;\n  z-index: 60;\n  display: flex;\n  align-items: flex-end;\n  justify-content: center;\n  background: rgba(20, 18, 16, 0.42);\n  animation: ac-fade 180ms var(--ac-ease);\n}\n\n.ac-overlay__sheet {\n  display: flex;\n  flex-direction: column;\n  width: 100%;\n  max-height: 88%;\n  padding: var(--ac-s4) max(var(--ac-page-x), env(safe-area-inset-right)) calc(var(--ac-s4) + env(safe-area-inset-bottom)) max(var(--ac-page-x), env(safe-area-inset-left));\n  background: var(--ac-paper);\n  border-radius: 14px 14px 0 0;\n  animation: ac-sheet 220ms var(--ac-ease);\n}\n\n.ac-overlay__head {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: var(--ac-s3);\n  padding-bottom: var(--ac-s3);\n}\n\n.ac-overlay__title {\n  font-size: var(--ac-h2);\n  font-weight: 500;\n}\n\n.ac-overlay__body {\n  flex: 1 1 auto;\n  min-height: 0;\n  overflow: auto;\n}\n\n@keyframes ac-fade {\n  from { opacity: 0; }\n  to { opacity: 1; }\n}\n\n@keyframes ac-sheet {\n  from { transform: translateY(14px); opacity: 0.6; }\n  to { transform: translateY(0); opacity: 1; }\n}\n';
 
   // src/ui/style.js
   var STYLE_ID = "anniversary-companion-style";
@@ -3233,7 +3459,6 @@
   function icon(name) {
     return ICONS[name] || ICONS.spark;
   }
-  var PLUS_ICON_SVG = '<svg viewBox="0 0 24 24" ' + STROKE + '><path d="M4 6.5h16v11H4z"/><path d="m4 7 8 6 8-6"/><path d="M15.5 16.5c.9-.9 2.4-.4 2.4.9s-1.5 2-2.4 2.6c-.9-.6-2.4-1.3-2.4-2.6s1.5-1.8 2.4-.9z" fill="currentColor" stroke="none"/></svg>';
 
   // src/ui/components.js
   function avatar(url, name, opts) {
@@ -3901,31 +4126,37 @@
 
   // src/ui/cardFrame.js
   var MIN_H = 320;
-  var MAX_H = 900;
+  var MAX_H = 760;
+  var THUMB_MIN = 300;
+  var THUMB_MAX = 520;
+  var ACTIONS = ["height", "done", "open", "finish"];
   function createCardFrame(html, options) {
     var opts = options || {};
+    var thumb = opts.mode === "thumb";
     var frame = document.createElement("iframe");
     frame.setAttribute("sandbox", "allow-scripts");
     frame.setAttribute("referrerpolicy", "no-referrer");
     frame.setAttribute("title", "纪念日贺卡");
     frame.setAttribute("loading", "lazy");
     frame.srcdoc = prepareTrustedCard(html);
-    var wrap = h("div", { class: "ac-cardframe" }, [frame]);
+    frame.style.height = (thumb ? THUMB_MIN : 420) + "px";
+    var wrap = h("div", { class: "ac-cardframe" + (thumb ? " ac-cardframe--thumb" : "") }, [frame]);
     var disposed = false;
     function onMessage(event) {
       if (disposed || !frame.contentWindow || event.source !== frame.contentWindow) return;
       var data = event.data;
       if (!data || data.type !== "ac-card") return;
+      if (ACTIONS.indexOf(data.action) === -1) return;
       var payload = data.payload && typeof data.payload === "object" ? data.payload : {};
       if (data.action === "height") {
         var height = Number(payload.height);
         if (!isFinite(height) || height <= 0) return;
-        frame.style.height = Math.min(MAX_H, Math.max(MIN_H, Math.round(height))) + "px";
+        var low = thumb ? THUMB_MIN : MIN_H;
+        var high = thumb ? THUMB_MAX : MAX_H;
+        frame.style.height = Math.min(high, Math.max(low, Math.round(height))) + "px";
         return;
       }
-      if (data.action === "done" || data.action === "open") {
-        if (typeof opts.onOpen === "function") opts.onOpen();
-      }
+      if (typeof opts.onDone === "function") opts.onDone(data.action);
     }
     window.addEventListener("message", onMessage);
     return {
@@ -3996,7 +4227,7 @@
     }
     function renderEnvelope() {
       var preview = letter[0] && letter[0].body || "我把这一封准备了很久。";
-      var envelope = h("div", { class: "ac-envelope" }, [
+      var envelope2 = h("div", { class: "ac-envelope" }, [
         h("div", { class: "ac-envelope__paper" }, [
           h("div", { class: "ac-envelope__name" }, (plan.characterName || "TA") + " 写给你"),
           h("div", { class: "ac-envelope__line" }, preview.slice(0, 48))
@@ -4004,9 +4235,9 @@
         h("div", { class: "ac-envelope__flap" }),
         h("div", { class: "ac-envelope__seal" }, "喜")
       ]);
-      envelope.addEventListener("click", function() {
-        if (envelope.classList.contains("ac-envelope--open")) return;
-        envelope.classList.add("ac-envelope--open");
+      envelope2.addEventListener("click", function() {
+        if (envelope2.classList.contains("ac-envelope--open")) return;
+        envelope2.classList.add("ac-envelope--open");
         setTimeout(function() {
           var now = ctx.actions.getState();
           if (now.route === "reveal" && now.planId === plan.id) ctx.actions.markRevealOpened();
@@ -4014,7 +4245,7 @@
       });
       body.appendChild(h("div", { class: "ac-envelope-wrap" }, [
         h("div", { class: "ac-label" }, cnDate(occurrence) + " · 第 " + index + " 个"),
-        envelope,
+        envelope2,
         h("div", { class: "ac-envelope__hint" }, "轻点信封拆开")
       ]));
     }
@@ -4064,7 +4295,7 @@
       }
       if (surprise.cardHtml) {
         body.appendChild(h("div", { class: "ac-group__title", style: "margin-top:24px" }, "一张卡"));
-        var frame = createCardFrame(surprise.cardHtml, { onOpen: function() {
+        var frame = createCardFrame(surprise.cardHtml, { onDone: function() {
         } });
         body.appendChild(frame.el);
         cleanups.push(frame.destroy);
@@ -4072,17 +4303,6 @@
       }
       body.appendChild(renderAudio());
       body.appendChild(renderNextYear());
-      var footer = h("div", { class: "ac-footer" }, [
-        h("button", {
-          class: "ac-btn ac-btn--ghost",
-          type: "button",
-          text: "把这张惊喜卡发到聊天",
-          onclick: function() {
-            ctx.actions.sendChatCard(plan.id);
-          }
-        })
-      ]);
-      el.appendChild(footer);
     }
     function renderAudio() {
       var saved = surprise.audio && surprise.audio.url ? surprise.audio.url : "";
@@ -4201,6 +4421,14 @@
   }
 
   // src/ui/views/settings.js
+  var PREVIEW_DATA = {
+    char: "沈砚",
+    title: "相识纪念日",
+    date: "11月20日",
+    index: 2,
+    line: "这一封，我准备了很久。",
+    note: "—— 沈砚"
+  };
   function createSettingsView(ctx, state) {
     var el = h("div", { class: "ac-view" });
     var body = h("div", { class: "ac-body" });
@@ -4242,7 +4470,33 @@
       ])
     ]);
     body.appendChild(aiGroup);
+    var openOverlays = [];
     var stylesBox = h("div", { class: "ac-styles" });
+    function openPreview(style) {
+      var overlay = h("div", { class: "ac-overlay" });
+      var sheet = h("div", { class: "ac-overlay__sheet" });
+      var frame = createCardFrame(buildFallbackCard(style.id, PREVIEW_DATA), { mode: "thumb" });
+      function close() {
+        frame.destroy();
+        overlay.remove();
+        var index = openOverlays.indexOf(close);
+        if (index >= 0) openOverlays.splice(index, 1);
+      }
+      overlay.appendChild(sheet);
+      sheet.appendChild(h("div", { class: "ac-overlay__head" }, [
+        h("div", { class: "ac-overlay__title" }, "预览 · " + style.label),
+        iconButton("close", "关闭预览", close)
+      ]));
+      sheet.appendChild(h("div", { class: "ac-overlay__body" }, [
+        frame.el,
+        note("这是内置模板的真实卡面，AI 不可用时用的就是它。")
+      ]));
+      overlay.addEventListener("click", function(event) {
+        if (event.target === overlay) close();
+      });
+      el.appendChild(overlay);
+      openOverlays.push(close);
+    }
     CARD_STYLES.forEach(function(style) {
       var btn = h("button", {
         class: "ac-style",
@@ -4253,16 +4507,37 @@
         h("span", null, style.label)
       ]);
       btn.addEventListener("click", function() {
-        ctx.actions.saveSettings({ cardStyle: style.id });
+        ctx.actions.saveSettings({ cardStyle: style.id }, { silent: true });
         Array.prototype.forEach.call(stylesBox.children, function(node) {
           node.setAttribute("aria-pressed", node === btn ? "true" : "false");
         });
+        openPreview(style);
       });
       stylesBox.appendChild(btn);
     });
     body.appendChild(group("贺卡风格", [
-      h("div", { class: "ac-cap" }, "AI 做贺卡时参考的版式，也用于 AI 不可用时的兜底。"),
+      h("div", { class: "ac-cap" }, "点一下可以看真实卡面。AI 不可用时用的就是这里的内置模板。"),
       stylesBox
+    ]));
+    body.appendChild(group("提示词", [
+      h("button", {
+        class: "ac-row ac-prompt-row",
+        type: "button",
+        onclick: function() {
+          ctx.actions.go("prompts");
+        }
+      }, [
+        h("div", { class: "ac-row__main" }, [
+          h("div", { class: "ac-row__title" }, "查看与编辑提示词"),
+          h("div", { class: "ac-row__meta" }, "四套：推测日期 / 准备脚本 / 惊喜内容 / 交互贺卡")
+        ]),
+        h("span", { class: "ac-prompt-state" }, "打开")
+      ]),
+      h(
+        "div",
+        { class: "ac-cap", style: "margin-top:8px" },
+        "这些提示词只用于插件自己的四个动作。本插件不参与主聊天，不会在每轮回复里注入任何内容。"
+      )
     ]));
     body.appendChild(group("数据", [
       h("div", { class: "ac-cap" }, "所有内容都存在插件自己的私有存储里。卸载插件会一并清空，不会动角色和主记忆。"),
@@ -4286,8 +4561,220 @@
       ])
     ]));
     body.appendChild(group("关于", [
-      note("纪念日 v" + (true ? "0.1.0" : "0.1.0") + "。本插件只读取角色与记忆，不写入主记忆；AI 生成的贺卡在沙箱里运行，无法访问宿主数据。")
+      note("纪念日 v" + (true ? "0.2.0" : "0.1.0") + "。本插件只读取角色与记忆，不写入主记忆；AI 生成的贺卡在沙箱里运行，无法访问宿主数据。")
     ]));
+    return {
+      el,
+      update: function() {
+      },
+      destroy: function() {
+        openOverlays.slice().forEach(function(close) {
+          try {
+            close();
+          } catch (e) {
+          }
+        });
+        openOverlays.length = 0;
+      }
+    };
+  }
+
+  // src/ui/views/prompts.js
+  function createPromptsView(ctx, state) {
+    var el = h("div", { class: "ac-view" });
+    var body = h("div", { class: "ac-body" });
+    el.appendChild(pageHeader({
+      title: "提示词",
+      onBack: function() {
+        ctx.actions.back();
+      }
+    }));
+    el.appendChild(body);
+    body.appendChild(note("这四套提示词只用于插件自己的四个动作。本插件不参与主聊天，不会在每轮回复里注入任何内容。"));
+    var list = h("div", { class: "ac-list" });
+    PROMPT_META.forEach(function(meta) {
+      var custom = state.settings.prompts && state.settings.prompts[meta.key];
+      var isCustom = !!(custom && (custom.system || custom.user));
+      var row = h("button", { class: "ac-row ac-prompt-row", type: "button" }, [
+        h("div", { class: "ac-row__main" }, [
+          h("div", { class: "ac-row__title" }, meta.label),
+          h("div", { class: "ac-row__meta" }, meta.desc)
+        ]),
+        h("span", { class: "ac-prompt-state" + (isCustom ? " ac-prompt-state--on" : "") }, isCustom ? "已自定义" : "默认")
+      ]);
+      row.addEventListener("click", function() {
+        ctx.actions.go("promptEdit", { promptKey: meta.key });
+      });
+      list.appendChild(row);
+    });
+    body.appendChild(list);
+    body.appendChild(note("留空即使用默认模板；两者都清空等于恢复默认。"));
+    return { el, update: function() {
+    }, destroy: function() {
+    } };
+  }
+  function createPromptEditView(ctx, state) {
+    var key = state.promptKey || "suggest";
+    var meta = promptMeta(key);
+    var saved = state.settings.prompts && state.settings.prompts[key] || { system: "", user: "" };
+    var draft = { system: saved.system || "", user: saved.user || "" };
+    var el = h("div", { class: "ac-view" });
+    var body = h("div", { class: "ac-body" });
+    var previewBox = h("div", { class: "ac-preview" }, "点「预览实际请求」看看会发出去什么。");
+    var stateTag = h(
+      "span",
+      { class: "ac-prompt-state" + (draft.system || draft.user ? " ac-prompt-state--on" : "") },
+      draft.system || draft.user ? "已自定义" : "默认"
+    );
+    var systemArea = h("textarea", {
+      class: "ac-prompt-area",
+      spellcheck: "false",
+      placeholder: "留空 = 使用默认 system（点下面「查看默认模板」）"
+    });
+    systemArea.value = draft.system;
+    systemArea.addEventListener("input", function() {
+      draft.system = systemArea.value;
+      refreshTag();
+    });
+    var userArea = h("textarea", {
+      class: "ac-prompt-area",
+      spellcheck: "false",
+      placeholder: "留空 = 使用默认 user 模板"
+    });
+    userArea.value = draft.user;
+    userArea.addEventListener("input", function() {
+      draft.user = userArea.value;
+      refreshTag();
+    });
+    function refreshTag() {
+      var custom = !!(draft.system || draft.user);
+      stateTag.textContent = custom ? "已自定义" : "默认";
+      stateTag.className = "ac-prompt-state" + (custom ? " ac-prompt-state--on" : "");
+    }
+    function insertToken(token) {
+      var area = document.activeElement === systemArea ? systemArea : userArea;
+      var start = typeof area.selectionStart === "number" ? area.selectionStart : area.value.length;
+      var end = typeof area.selectionEnd === "number" ? area.selectionEnd : start;
+      area.value = area.value.slice(0, start) + token + area.value.slice(end);
+      if (typeof area.setSelectionRange === "function") area.setSelectionRange(start + token.length, start + token.length);
+      if (area === systemArea) draft.system = area.value;
+      else draft.user = area.value;
+      refreshTag();
+    }
+    function chips() {
+      var box = h("div", { class: "ac-chips" });
+      meta.placeholders.forEach(function(name) {
+        var label = PROMPT_PLACEHOLDER_LABELS[name] || name;
+        box.appendChild(h("button", {
+          class: "ac-chip",
+          type: "button",
+          text: label,
+          onclick: function() {
+            insertToken("{{" + name + "}}");
+          }
+        }));
+      });
+      return box;
+    }
+    var defaultBox = h("div", { class: "ac-preview", style: "display:none" });
+    defaultBox.textContent = "【默认 system】\n" + meta.defaults.system + "\n\n【默认 user】\n" + meta.defaults.user;
+    var defaultBtn = h("button", {
+      class: "ac-btn ac-btn--text",
+      type: "button",
+      text: "查看默认模板",
+      onclick: function() {
+        var hidden = defaultBox.style.display === "none";
+        defaultBox.style.display = hidden ? "block" : "none";
+        defaultBtn.textContent = hidden ? "收起默认模板" : "查看默认模板";
+      }
+    });
+    var previewBtn = h("button", {
+      class: "ac-btn ac-btn--ghost",
+      type: "button",
+      text: "预览实际请求",
+      onclick: async function() {
+        previewBtn.disabled = true;
+        previewBtn.textContent = "生成中…";
+        var res = await ctx.actions.previewPrompt(key, draft);
+        previewBtn.disabled = false;
+        previewBtn.textContent = "预览实际请求";
+        clear(previewBox);
+        if (!res || !res.ok) {
+          previewBox.textContent = "预览失败";
+          return;
+        }
+        res.messages.forEach(function(message) {
+          previewBox.appendChild(h("div", null, "【" + message.role + "】"));
+          previewBox.appendChild(h("div", { class: "ac-preview__role", style: "color:inherit;font-weight:400" }, message.content));
+          previewBox.appendChild(h("div", { class: "ac-preview__meta" }, ""));
+        });
+        previewBox.appendChild(h("div", { class: "ac-preview__meta" }, [
+          h("span", null, "共 " + res.messages.length + " 条消息"),
+          h("span", null, "约 " + res.tokens + " tokens")
+        ]));
+      }
+    });
+    var saveBtn = h("button", {
+      class: "ac-btn ac-btn--primary",
+      type: "button",
+      text: "保存",
+      onclick: function() {
+        ctx.actions.savePrompt(key, draft);
+        ctx.actions.toast(draft.system || draft.user ? "提示词已保存" : "已恢复默认");
+        ctx.actions.back();
+      }
+    });
+    var resetBtn = h("button", {
+      class: "ac-btn ac-btn--ghost",
+      type: "button",
+      text: "恢复默认",
+      onclick: async function() {
+        var ok = await ctx.host.ui.confirm({
+          title: "恢复默认提示词？",
+          message: "「" + meta.label + "」的 system 与 user 都会清空，回到内置模板。",
+          confirmText: "恢复"
+        });
+        if (!ok) return;
+        draft.system = "";
+        draft.user = "";
+        systemArea.value = "";
+        userArea.value = "";
+        refreshTag();
+        ctx.actions.resetPrompt(key);
+        ctx.actions.toast("已恢复默认");
+      }
+    });
+    el.appendChild(pageHeader({
+      title: meta.label,
+      onBack: function() {
+        ctx.actions.back();
+      }
+    }));
+    el.appendChild(body);
+    body.appendChild(h("div", { style: "display:flex;align-items:center;gap:8px;padding-top:4px" }, [
+      stateTag,
+      h("span", { class: "ac-cap ac-faint" }, meta.desc)
+    ]));
+    if (key === "card") {
+      body.appendChild(note('贺卡提示词里必须保留 data-ac-open 和 __acPost，并且不能出现"照片/插图"这类描述，否则生成结果会被判废并换回内置模板。'));
+    }
+    body.appendChild(h("div", { class: "ac-prompt-field" }, [
+      h("div", { class: "ac-prompt-label" }, [h("span", null, "system"), h("span", null, "角色与硬性规则")]),
+      systemArea,
+      h("div", { class: "ac-cap ac-faint", style: "margin-top:6px" }, "留空使用默认 system。system 里一般不需要占位符。")
+    ]));
+    body.appendChild(h("div", { class: "ac-prompt-field" }, [
+      h("div", { class: "ac-prompt-label" }, [h("span", null, "user"), h("span", null, "这一轮的具体资料")]),
+      userArea,
+      h("div", { class: "ac-chip", style: "margin-top:8px;display:inline-block;cursor:default" }, "点下面的词插入占位符"),
+      chips()
+    ]));
+    body.appendChild(h("div", { class: "ac-prompt-field" }, [defaultBtn, defaultBox]));
+    body.appendChild(h("div", { class: "ac-prompt-field" }, [
+      previewBtn,
+      previewBox
+    ]));
+    body.appendChild(h("div", { class: "ac-inline-actions", style: "margin-top:24px" }, [resetBtn, saveBtn]));
     return { el, update: function() {
     }, destroy: function() {
     } };
@@ -4306,9 +4793,11 @@
       if (state.route === "detail") return createDetailView(viewCtx, state);
       if (state.route === "reveal") return createRevealView(viewCtx, state);
       if (state.route === "settings") return createSettingsView(viewCtx, state);
+      if (state.route === "prompts") return createPromptsView(viewCtx, state);
+      if (state.route === "promptEdit") return createPromptEditView(viewCtx, state);
       return createHomeView(viewCtx);
     }
-    function render2(state) {
+    function render(state) {
       if (typeof updateTheme === "function") updateTheme(state.settings.theme);
       if (state.route === "edit" && current && current.route === "edit" && current.planId === state.planId) {
         return;
@@ -4325,8 +4814,8 @@
       root.appendChild(view.el);
       if (view.update) view.update(state);
     }
-    var unsubscribe = app2.subscribe(render2);
-    render2(app2.ctx.state);
+    var unsubscribe = app2.subscribe(render);
+    render(app2.ctx.state);
     return {
       destroy: function() {
         unsubscribe();
@@ -4342,121 +4831,19 @@
     };
   }
 
-  // src/chat/card.js
-  var MESSAGE_TYPE2 = "ac-anniversary";
-  var APP_ID = "anniversary-companion-home";
-  var PENDING_KEY = "__acPendingOpen";
-  function dateLabel(cardData) {
-    var data = cardData || {};
-    if (data.dateText) return String(data.dateText);
-    return "";
-  }
-  function openPlan(planId, roche) {
-    try {
-      if (typeof window !== "undefined") window[PENDING_KEY] = planId || "";
-    } catch (e) {
-    }
-    try {
-      if (roche && roche.storage && planId) {
-        roche.storage.get("ac:meta").then(function(meta) {
-          var next = Object.assign({}, meta && typeof meta === "object" ? meta : {}, { pendingOpen: planId });
-          return roche.storage.set("ac:meta", next);
-        }).catch(function() {
-        });
-      }
-    } catch (e) {
-    }
-    try {
-      if (roche && roche.ui && typeof roche.ui.openApp === "function") {
-        roche.ui.openApp(APP_ID);
-        return;
-      }
-    } catch (e) {
-    }
-    try {
-      if (roche && roche.ui && typeof roche.ui.toast === "function") {
-        roche.ui.toast("在当前 Roche 版本里打不开纪念日 App");
-      }
-    } catch (e) {
-    }
-  }
-  function render(container, message, roche) {
-    ensureStyle();
-    var data = message && message.cardData ? message.cardData : {};
-    var av = h("div", { class: "ac-card__avatar" });
-    if (data.avatar) {
-      var img = h("img", { alt: "", src: data.avatar });
-      img.addEventListener("error", function() {
-        if (img.parentNode) img.parentNode.removeChild(img);
-      });
-      av.appendChild(img);
-    } else {
-      av.textContent = String(data.charName || "纪").slice(0, 1);
-    }
-    var title = h("div", { class: "ac-card__title" }, data.title || "纪念日");
-    var sub = h("div", { class: "ac-card__sub" }, [
-      data.charName ? data.charName + " · " : "",
-      "第 " + (Number(data.index) || 1) + " 个",
-      dateLabel(data) ? " · " + dateLabel(data) : ""
-    ].join(""));
-    var act = h("span", { class: "ac-card__act" }, "拆开");
-    var card = h("div", { class: "ac-card", role: "button", tabindex: "0" }, [
-      av,
-      h("div", { class: "ac-card__main" }, [title, sub]),
-      act
-    ]);
-    card.addEventListener("click", function() {
-      openPlan(data.planId || "", roche);
-    });
-    card.addEventListener("keydown", function(event) {
-      if (event && (event.key === "Enter" || event.key === " ")) {
-        if (event.preventDefault) event.preventDefault();
-        openPlan(data.planId || "", roche);
-      }
-    });
-    clear(container);
-    container.appendChild(card);
-  }
-  function mountCard(container, message, roche) {
-    render(container, message, roche);
-  }
-  function updateCard(container, message, roche) {
-    render(container, message, roche);
-  }
-  function unmountCard() {
-  }
-  function onCardAction(message, action, payload, roche) {
-    if (action !== "open" && action !== "unlock") return;
-    var planId = message && message.cardData && message.cardData.planId || "";
-    openPlan(planId, roche);
-  }
-  async function openPlusAction(ctx, roche) {
-    ensureStyle();
-    var plans = [];
-    try {
-      if (roche && roche.storage && roche.storage.get) {
-        plans = normalizePlans(await roche.storage.get("ac:plans"));
-      }
-    } catch (e) {
-      plans = [];
-    }
-    var nearest = activePlans(plans, Date.now())[0];
-    openPlan(nearest ? nearest.id : "", roche);
-  }
-
   // src/main.js
   var app = null;
-  var shell2 = null;
+  var shell = null;
   async function mount(container, roche) {
     ensureStyle();
     container.classList.add("ac-host");
-    app = await createApp({ container, roche, version: "0.1.0" });
-    shell2 = mountShell(container, app);
+    app = await createApp({ container, roche, version: "0.2.0" });
+    shell = mountShell(container, app);
   }
   async function unmount(container) {
-    if (shell2) {
-      shell2.destroy();
-      shell2 = null;
+    if (shell) {
+      shell.destroy();
+      shell = null;
     }
     if (app) {
       app.destroy();
@@ -4469,7 +4856,7 @@
   window.RochePlugin.register({
     id: "anniversary-companion",
     name: "纪念日",
-    version: "0.1.0",
+    version: "0.2.0",
     description: "让角色从记忆里找回你们的日子，一天天悄悄准备，当天拆开惊喜。",
     apps: [
       {
@@ -4480,31 +4867,6 @@
         mount,
         unmount
       }
-    ],
-    // 只做宿主 UI 层：当天发卡片 + 「+」面板入口。
-    // 不写 promptOnly / contextProvider / preflight / tools，不注入主聊天上下文。
-    chat: {
-      scope: { conversationTypes: ["direct", "group"] },
-      messageTypes: [
-        {
-          id: MESSAGE_TYPE2,
-          name: "纪念日惊喜",
-          scope: { conversationTypes: ["direct", "group"] },
-          mount: mountCard,
-          update: updateCard,
-          unmount: unmountCard,
-          onAction: onCardAction
-        }
-      ],
-      plusActions: [
-        {
-          id: "ac-open",
-          label: "纪念日",
-          iconSvg: PLUS_ICON_SVG,
-          scope: { conversationTypes: ["direct", "group"] },
-          open: openPlusAction
-        }
-      ]
-    }
+    ]
   });
 })();
